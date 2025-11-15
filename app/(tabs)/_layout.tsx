@@ -1,0 +1,45 @@
+import { Calendar, List, User } from 'lucide-react-native';
+import { Tabs } from 'expo-router';
+import { colors } from '../../lib/theme';
+
+export default function TabsLayout() {
+  return (
+    <Tabs screenOptions={{
+      headerShown: false,
+      tabBarActiveTintColor: colors.accent,
+      tabBarInactiveTintColor: colors.text,
+      tabBarStyle: {
+        backgroundColor: colors.bg,
+      },
+    }}
+    >
+      <Tabs.Screen
+        name="classes"
+        options={{
+          title: 'Τμήματα',
+          tabBarIcon: ({ color, size }) => (
+            <Calendar color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="bookings"
+        options={{
+          title: 'Οι Κρατήσεις μου',
+          tabBarIcon: ({ color, size }) => (
+            <List color={color} size={size} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Προφίλ',
+          tabBarIcon: ({ color, size }) => (
+            <User color={color} size={size} />
+          ),
+        }}
+      />
+    </Tabs>
+  );
+}

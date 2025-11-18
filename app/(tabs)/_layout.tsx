@@ -1,8 +1,9 @@
 import { Calendar, List, User } from 'lucide-react-native';
 import { Tabs } from 'expo-router';
-import { colors } from '../../lib/theme';
+import { useTheme } from '../../context/ThemeProvider';
 
 export default function TabsLayout() {
+    const { colors } = useTheme();
   return (
     <Tabs screenOptions={{
       headerShown: false,

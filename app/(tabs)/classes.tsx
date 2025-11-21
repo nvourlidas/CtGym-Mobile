@@ -31,6 +31,8 @@ import DateTimePicker, {
 import SessionCard from '../../components/SessionCard';
 import { useTheme } from '../../context/ThemeProvider';
 import { ThemeColors } from '../../context/ThemeProvider';
+import { el } from 'date-fns/locale';
+
 
 
 
@@ -64,6 +66,7 @@ type ActiveMembership = {
   tenant_id: string;
   user_id: string;
   plan_id: string | null;
+  status?: string | null;
   membership_plans?: {
     category_id: string | null;
   } | null;
@@ -74,7 +77,7 @@ type DateFilterMode = 'today' | 'week' | 'custom';
 
 export default function ClassesScreen() {
   const { profile } = useAuth();
-    const { colors, logoUrl } = useTheme();
+  const { colors, logoUrl } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [sessions, setSessions] = useState<ClassSession[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,7 +155,7 @@ export default function ClassesScreen() {
         const { data: memData, error: memError } = await supabase
           .from('memberships')
           .select(
-            'id, tenant_id, user_id, plan_id, membership_plans (category_id)'
+            'id, tenant_id, user_id, plan_id,status,membership_plans (category_id)'
           )
           .eq('tenant_id', profile.tenant_id)
           .eq('user_id', profile.id)
@@ -168,6 +171,7 @@ export default function ClassesScreen() {
             tenant_id: row.tenant_id,
             user_id: row.user_id,
             plan_id: row.membership_plan_id ?? null,
+            status: row.status,
             membership_plans: row.membership_plans
               ? { category_id: row.membership_plans.category_id ?? null }
               : null,
@@ -470,7 +474,7 @@ export default function ClassesScreen() {
 
   const renderItem = ({ item }: { item: ClassSession }) => {
     const start = parseISO(item.starts_at);
-    const timeStr = format(start, 'EEE dd/MM · HH:mm');
+    const timeStr = format(start, 'EEE dd/MM · HH:mm', { locale: el });
     const title = item.classes?.title ?? 'Μάθημα';
     const description = item.classes?.description ?? null;
     const booking = bookingStates[item.id] ?? null;
@@ -484,9 +488,10 @@ export default function ClassesScreen() {
     const membershipCategoryId =
       activeMembership?.membership_plans?.category_id ?? null;
 
+
     let canBookWithMembership = false;
 
-    if (activeMembership) {
+    if (activeMembership && activeMembership.status === 'active') {
       if (membershipCategoryId == null) {
         // plan χωρίς category => ισχύει για όλα
         canBookWithMembership = true;
@@ -550,6 +555,37 @@ export default function ClassesScreen() {
         <Text style={styles.headerSubtitle}>{label}</Text>
       </View>
 
+
+            {/* Date filter row */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Ημέρα</Text>
+        <View style={styles.chipRow}>
+          {(['today', 'week', 'custom'] as DateFilterMode[]).map((mode) => {
+            const isActive = dateFilter === mode;
+            let text = 'Σήμερα';
+            if (mode === 'week') text = 'Αυτή την εβδομάδα';
+            if (mode === 'custom') text = 'Ημερομηνία';
+
+            return (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.chip, isActive && styles.chipActive]}
+                onPress={() => {
+                  setDateFilter(mode);
+                  if (mode === 'custom') {
+                    setShowDatePicker(true);
+                  }
+                }}
+              >
+                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
+                  {text}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
       {/* Categories row */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Κατηγορίες</Text>
@@ -580,37 +616,19 @@ export default function ClassesScreen() {
         />
       </View>
 
-      {/* Date filter row */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Ημέρα</Text>
-        <View style={styles.chipRow}>
-          {(['today', 'week', 'custom'] as DateFilterMode[]).map((mode) => {
-            const isActive = dateFilter === mode;
-            let text = 'Σήμερα';
-            if (mode === 'week') text = 'Αυτή την εβδομάδα';
-            if (mode === 'custom') text = 'Ημερομηνία';
 
-            return (
-              <TouchableOpacity
-                key={mode}
-                style={[styles.chip, isActive && styles.chipActive]}
-                onPress={() => {
-                  setDateFilter(mode);
-                  if (mode === 'custom') {
-                    setShowDatePicker(true);
-                  }
-                }}
-              >
-                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                  {text}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
 
-        <Text style={styles.rangeLabel}>{label}</Text>
-      </View>
+
+      {dateFilter === 'custom' && showDatePicker && (
+        <DateTimePicker
+          value={customDate}
+          mode="date"
+          textColor="white"
+          themeVariant="dark"
+          display={Platform.OS === 'ios' ? 'default' : 'default'}
+          onChange={handleCustomDateChange}
+        />
+      )}
 
       {/* Sessions list */}
       <View style={{ flex: 1, marginTop: 8 }}>
@@ -638,14 +656,6 @@ export default function ClassesScreen() {
       </View>
 
 
-      {dateFilter === 'custom' && showDatePicker && (
-        <DateTimePicker
-          value={customDate}
-          mode="date"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={handleCustomDateChange}
-        />
-      )}
 
     </View>
   );
@@ -653,81 +663,81 @@ export default function ClassesScreen() {
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 40,
-    backgroundColor: colors.bg,
-  },
-  logoWrapper: {
-    alignItems: 'center',
-  },
-  tenantLogo: {
-    width: 190,
-    height: 80,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 8,
-  },
-  headerTitle: {
-    color: colors.text,
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  headerSubtitle: {
-    color: colors.textMuted,
-    fontSize: 13,
-  },
-  section: {
-    marginTop: 8,
-    marginBottom: 4,
-  },
-  sectionTitle: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 6,
-  },
-  chipRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  chip: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-    marginRight: 8,
-    backgroundColor: colors.bg,
-  },
-  chipActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  chipText: {
-    fontSize: 13,
-    color: colors.textMuted,
-  },
-  chipTextActive: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  rangeLabel: {
-    marginTop: 4,
-    fontSize: 12,
-    color: colors.textMuted,
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  emptyText: {
-    color: colors.textMuted,
-    textAlign: 'center',
-  },
-});
+    container: {
+      flex: 1,
+      paddingHorizontal: 16,
+      paddingTop: 40,
+      backgroundColor: colors.bg,
+    },
+    logoWrapper: {
+      alignItems: 'center',
+    },
+    tenantLogo: {
+      width: 190,
+      height: 80,
+    },
+    headerRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-end',
+      marginBottom: 8,
+    },
+    headerTitle: {
+      color: colors.text,
+      fontSize: 20,
+      fontWeight: '700',
+    },
+    headerSubtitle: {
+      color: colors.textMuted,
+      fontSize: 13,
+    },
+    section: {
+      marginTop: 8,
+      marginBottom: 4,
+    },
+    sectionTitle: {
+      color: colors.text,
+      fontSize: 14,
+      fontWeight: '600',
+      marginBottom: 6,
+    },
+    chipRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    chip: {
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 999,
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      marginRight: 8,
+      backgroundColor: colors.bg,
+    },
+    chipActive: {
+      backgroundColor: colors.primary,
+      borderColor: colors.primary,
+    },
+    chipText: {
+      fontSize: 13,
+      color: colors.textMuted,
+    },
+    chipTextActive: {
+      color: '#fff',
+      fontWeight: '600',
+    },
+    rangeLabel: {
+      marginTop: 4,
+      fontSize: 12,
+      color: colors.textMuted,
+    },
+    center: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    emptyText: {
+      color: colors.textMuted,
+      textAlign: 'center',
+    },
+  });

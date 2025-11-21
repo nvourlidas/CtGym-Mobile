@@ -8,7 +8,7 @@ import {
   StyleSheet,
   Modal,
 } from 'react-native';
-import { Lock } from 'lucide-react-native';
+import { Lock, Pen } from 'lucide-react-native';
 import { ThemeColors } from '../context/ThemeProvider';
 import { useTheme } from '../context/ThemeProvider';
 
@@ -130,7 +130,11 @@ export default function SessionCard({
 
   return (
     <View style={styles.card}>
-      <Text style={styles.cardTitle}>{title}</Text>
+      {/* 🔹 Title left – Time right */}
+      <View style={styles.headerRow}>
+        <Text style={styles.cardTitle}>{title}</Text>
+        <Text style={styles.cardTime}>{timeLabel}</Text>
+      </View>
 
       {!!description && (
         <Text style={styles.cardDescription} numberOfLines={3}>
@@ -138,9 +142,7 @@ export default function SessionCard({
         </Text>
       )}
 
-      <Text style={styles.cardTime}>{timeLabel}</Text>
-
-      {capacity != null && (
+      {capacity != null && !isBooked && (
         <Text style={styles.cardCapacity}>
           Θέσεις: {capacity}
           {remainingSeats != null && (
@@ -150,6 +152,9 @@ export default function SessionCard({
         </Text>
       )}
 
+      {isBooked && (<Text style={{ color: colors.success }}>Έχετε κάνει κράτηση</Text>
+      )}
+
       {/* Main button (Κράτηση / Ακύρωση) */}
       {!showDropIn && (
         <TouchableOpacity
@@ -157,7 +162,7 @@ export default function SessionCard({
             styles.actionBtn,
             { backgroundColor: actionColor },
             (disabled || (!canBookWithMembership && !isBooked) || isFull) &&
-            styles.actionBtnDisabled,
+              styles.actionBtnDisabled,
           ]}
           onPress={handleMainPress}
           disabled={disabled}
@@ -174,6 +179,7 @@ export default function SessionCard({
           )}
         </TouchableOpacity>
       )}
+
       {/* Drop-in button */}
       {showDropIn && (
         <TouchableOpacity
@@ -245,103 +251,113 @@ export default function SessionCard({
 
 const makeStyles = (colors: ThemeColors) =>
   StyleSheet.create({
-  card: {
-    backgroundColor: colors.card,
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-  },
-  cardTitle: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  cardDescription: {
-    color: colors.textMuted,
-    fontSize: 13,
-    marginBottom: 6,
-  },
-  cardTime: {
-    color: colors.textMuted,
-    fontSize: 14,
-  },
-  cardCapacity: {
-    color: colors.accent,
-    marginTop: 6,
-    fontSize: 13,
-  },
-  actionBtn: {
-    marginTop: 10,
-    paddingVertical: 10,
-    borderRadius: 999,
-    alignItems: 'center',
-  },
-  actionBtnDisabled: {
-    opacity: 0.4,
-  },
-  lockRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dropInBtn: {
-    backgroundColor: colors.accent,
-  },
-  actionText: {
-    color: 'white',
-    fontWeight: '700',
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalBox: {
-    width: '80%',
-    backgroundColor: colors.card,
-    borderRadius: 16,
-    padding: 20,
-    borderWidth: 1,
-    borderColor: colors.textMuted,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 8,
-  },
-  modalText: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginBottom: 16,
-  },
-  modalButtonsRow: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-  },
-  modalButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-  },
-  modalButtonSecondary: {
-    backgroundColor: 'transparent',
-  },
-  modalButtonSecondaryText: {
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  modalButtonPrimary: {
-    backgroundColor: colors.primary,
-  },
-  modalButtonPrimaryText: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-});
+    card: {
+      backgroundColor: colors.card,
+      padding: 16,
+      borderRadius: 12,
+      marginBottom: 10,
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+    },
+    // 🔹 new: header row for title + time
+    headerRow: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'flex-start',
+      marginBottom: 11,
+      gap: 8,
+    },
+    cardTitle: {
+      color: colors.text,
+      fontSize: 16,
+      fontWeight: '600',
+      flexShrink: 1,
+    },
+    cardTime: {
+      color: colors.accent,
+      fontSize: 13,
+      textAlign: 'right',
+      fontWeight: '800',
+    },
+    cardDescription: {
+      color: colors.textMuted,
+      fontSize: 13,
+      marginBottom: 6,
+    },
+    cardCapacity: {
+      color: colors.accent,
+      marginTop: 6,
+      fontSize: 13,
+    },
+    actionBtn: {
+      marginTop: 10,
+      paddingVertical: 10,
+      borderRadius: 999,
+      alignItems: 'center',
+    },
+    actionBtnDisabled: {
+      opacity: 0.4,
+    },
+    lockRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    dropInBtn: {
+      backgroundColor: colors.accent,
+    },
+    actionText: {
+      color: 'white',
+      fontWeight: '700',
+    },
+    // Modal styles
+    modalOverlay: {
+      flex: 1,
+      backgroundColor: 'rgba(0,0,0,0.45)',
+      justifyContent: 'center',
+      alignItems: 'center',
+    },
+    modalBox: {
+      width: '80%',
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 20,
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+    },
+    modalTitle: {
+      fontSize: 18,
+      fontWeight: '700',
+      color: colors.text,
+      marginBottom: 8,
+    },
+    modalText: {
+      fontSize: 14,
+      color: colors.textMuted,
+      marginBottom: 16,
+    },
+    modalButtonsRow: {
+      flexDirection: 'row',
+      justifyContent: 'flex-end',
+      gap: 8,
+    },
+    modalButton: {
+      paddingVertical: 8,
+      paddingHorizontal: 14,
+      borderRadius: 999,
+    },
+    modalButtonSecondary: {
+      backgroundColor: 'transparent',
+    },
+    modalButtonSecondaryText: {
+      color: colors.textMuted,
+      fontWeight: '600',
+    },
+    modalButtonPrimary: {
+      backgroundColor: colors.primary,
+    },
+    modalButtonPrimaryText: {
+      color: '#fff',
+      fontWeight: '700',
+    },
+  });

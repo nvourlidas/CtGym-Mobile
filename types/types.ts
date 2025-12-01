@@ -3,6 +3,8 @@ export type Profile = {
   full_name: string | null;
   phone: string | null;
   tenant_id: string;
+  email: string | null; 
+  max_dropin_debt?: number | null; 
 };
 
 export type Booking = {

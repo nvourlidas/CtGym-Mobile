@@ -1,4 +1,4 @@
-import { Calendar, List, User } from 'lucide-react-native';
+import { Calendar, List, User, QrCode, QrCodeIcon } from 'lucide-react-native';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeProvider';
 
@@ -29,6 +29,15 @@ export default function TabsLayout() {
           title: 'Οι Κρατήσεις μου',
           tabBarIcon: ({ color, size }) => (
             <List color={color} size={size} />
+          ),
+        }}
+      />
+            <Tabs.Screen
+        name="CheckIn"
+        options={{
+          title: 'Check-In',
+          tabBarIcon: ({ color, size }) => (
+            <QrCodeIcon color={color} size={size} />
           ),
         }}
       />

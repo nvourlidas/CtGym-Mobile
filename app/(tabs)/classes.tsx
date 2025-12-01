@@ -2,11 +2,12 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   View,
   Text,
-  FlatList,
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
   Image,
+  ScrollView,
+  RefreshControl,
 } from 'react-native';
 import { useAuth } from '../../context/AuthProvider';
 import { supabase } from '../../lib/supabase';
@@ -14,28 +15,21 @@ import {
   getMyBookingsForSession,
   bookSession,
   updateBookingStatus,
-  bookDropInSession
+  bookDropInSession,
 } from '../../api/bookings';
 import {
-  startOfWeek,
-  endOfWeek,
   startOfDay,
   endOfDay,
   format,
   parseISO,
 } from 'date-fns';
-import { Platform } from 'react-native';
-import DateTimePicker, {
-  DateTimePickerEvent,
-} from '@react-native-community/datetimepicker';
 import SessionCard from '../../components/SessionCard';
+import WeekDateFilter from '../../components/WeekDateFilter';
+import CategoryFilter from '../../components/CategoryFilter';
 import { useTheme } from '../../context/ThemeProvider';
 import { ThemeColors } from '../../context/ThemeProvider';
 import { el } from 'date-fns/locale';
-
-
-
-
+import { ChevronDown, ChevronRight } from 'lucide-react-native';
 
 type ClassSession = {
   id: string;
@@ -44,20 +38,23 @@ type ClassSession = {
   starts_at: string;
   ends_at: string | null;
   capacity: number | null;
+  cancel_before_hours: number | null;
   classes: {
     title: string;
     description?: string | null;
     category_id?: string | null;
     drop_in_enabled?: boolean | null;
-    drop_in_price?: number | null;   // 👈 NEW
+    drop_in_price?: number | null;
+    member_drop_in_price?: number | null;
+    coaches: {
+      full_name: string | null;
+    } | null;
   } | null;
 };
 
-
-
-// keep it loose since we don't know exact columns of class_categories
 type ClassCategory = {
   id: string;
+  color?: string | null;
   [key: string]: any;
 };
 
@@ -67,18 +64,14 @@ type ActiveMembership = {
   user_id: string;
   plan_id: string | null;
   status?: string | null;
-  membership_plans?: {
-    category_id: string | null;
-  } | null;
+  plan_category_ids: string[];
 };
-
-
-type DateFilterMode = 'today' | 'week' | 'custom';
 
 export default function ClassesScreen() {
   const { profile } = useAuth();
   const { colors, logoUrl } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [sessions, setSessions] = useState<ClassSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [bookingStates, setBookingStates] = useState<
@@ -86,20 +79,41 @@ export default function ClassesScreen() {
   >({});
   const [bookingLoadingId, setBookingLoadingId] = useState<string | null>(null);
 
-
   const [activeMembership, setActiveMembership] =
     useState<ActiveMembership | null>(null);
-
 
   const [remainingSeats, setRemainingSeats] = useState<
     Record<string, number | null>
   >({});
+  const [dropInDebt, setDropInDebt] = useState<number>(0);
 
+  const [categories, setCategories] = useState<ClassCategory[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] =
+    useState<string | 'all'>('all');
+
+  // single selectedDate
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [refreshing, setRefreshing] = useState(false);
+
+  // accordion state
+  const [showMorning, setShowMorning] = useState(true);
+  const [showAfternoon, setShowAfternoon] = useState(true);
+  const [showEvening, setShowEvening] = useState(true);
+
+  const handleRefresh = async () => {
+    if (!profile) return;
+    setRefreshing(true);
+    try {
+      await fetchSessions();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const adjustRemaining = (sessionId: string, delta: number) => {
     setRemainingSeats((prev) => {
       const current = prev[sessionId];
-      if (current == null) return prev; // αν δεν έχουμε τιμή, μην πειράξεις τίποτα
+      if (current == null) return prev;
 
       return {
         ...prev,
@@ -108,85 +122,106 @@ export default function ClassesScreen() {
     });
   };
 
-  const [categories, setCategories] = useState<ClassCategory[]>([]);
-  const [selectedCategoryId, setSelectedCategoryId] =
-    useState<string | 'all'>('all');
-
-  const [dateFilter, setDateFilter] = useState<DateFilterMode>('today');
-  const [customDate, setCustomDate] = useState<Date>(new Date());
-
-  const [showDatePicker, setShowDatePicker] = useState(false);
-
-  const [refreshing, setRefreshing] = useState(false);
-
-  const handleRefresh = async () => {
+  useEffect(() => {
     if (!profile) return;
-    setRefreshing(true);
-    try {
-      await fetchSessions(); // reuse existing logic
-    } finally {
-      setRefreshing(false);
-    }
-  };
 
+    const loadDropInDebt = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('bookings')
+          .select('booking_type, drop_in_price, drop_in_paid')
+          .eq('tenant_id', profile.tenant_id)
+          .eq('user_id', profile.id);
 
+        if (error) {
+          console.log('drop-in debt error', error);
+          return;
+        }
 
-  // ---- Load tenant logo + categories once we know profile ----
+        const total = (data ?? []).reduce((sum, row: any) => {
+          if (
+            row.booking_type === 'drop_in' &&
+            !row.drop_in_paid &&
+            row.drop_in_price != null
+          ) {
+            return sum + Number(row.drop_in_price);
+          }
+          return sum;
+        }, 0);
+
+        setDropInDebt(total);
+      } catch (err) {
+        console.log('drop-in debt unexpected error', err);
+      }
+    };
+
+    loadDropInDebt();
+  }, [profile]);
+
+  // ---- Load categories + membership once we know profile ----
   useEffect(() => {
     if (!profile) return;
 
     const loadTenantAndCategories = async () => {
       try {
-        // Tenant logo
-        const { data: tenant, error: tenantError } = await supabase
-          .from('tenants') // 👈 adjust table/column names if different
-          .select('logo_url')
-          .eq('id', profile.tenant_id)
-          .single();
-
-
         // Categories
         const { data: catData, error: catError } = await supabase
-          .from('class_categories') // 👈 adjust table name if needed
+          .from('class_categories')
           .select('*')
           .eq('tenant_id', profile.tenant_id);
 
-        // Active membership for this user (join με membership_plans για category)
+        if (catError) {
+          console.log('catError', catError);
+        } else if (catData) {
+          setCategories(catData as ClassCategory[]);
+        }
+
+        // Active membership
         const { data: memData, error: memError } = await supabase
           .from('memberships')
           .select(
-            'id, tenant_id, user_id, plan_id,status,membership_plans (category_id)'
+            `
+      id, tenant_id, user_id, plan_id, status,
+      membership_plans (
+        membership_plan_categories (
+          category_id
+        )
+      )
+    `
           )
           .eq('tenant_id', profile.tenant_id)
           .eq('user_id', profile.id)
-          .order('starts_at', { ascending: false }) // ή created_at
+          .order('starts_at', { ascending: false })
           .limit(1);
 
-
-        if (!memError && memData && memData.length > 0) {
+        if (memError) {
+          console.log('memError', memError);
+          setActiveMembership(null);
+        } else if (memData && memData.length > 0) {
           const row = memData[0] as any;
+
+          const links =
+            row.membership_plans?.membership_plan_categories ?? [];
+
+          const categoryIds: string[] = links
+            .map((l: any) => l?.category_id)
+            .filter(
+              (id: any) => typeof id === 'string' && id.trim().length > 0,
+            );
 
           const membership: ActiveMembership = {
             id: row.id,
             tenant_id: row.tenant_id,
             user_id: row.user_id,
-            plan_id: row.membership_plan_id ?? null,
+            plan_id: row.plan_id ?? null,
             status: row.status,
-            membership_plans: row.membership_plans
-              ? { category_id: row.membership_plans.category_id ?? null }
-              : null,
+            plan_category_ids: categoryIds,
           };
 
           setActiveMembership(membership);
         } else {
           console.log('No membership found for user', profile.id);
           setActiveMembership(null);
-        }
-
-
-
-        if (!catError && catData) {
-          setCategories(catData as ClassCategory[]);
         }
       } catch (err) {
         console.log('loadTenantAndCategories error', err);
@@ -196,40 +231,18 @@ export default function ClassesScreen() {
     loadTenantAndCategories();
   }, [profile]);
 
-  // ---- Date range based on filter ----
+  // ---- Date range based on selectedDate ----
   const { rangeStart, rangeEnd, label } = useMemo(() => {
-    const now = new Date();
-
-    if (dateFilter === 'today') {
-      const start = startOfDay(now);
-      const end = endOfDay(now);
-      return {
-        rangeStart: start,
-        rangeEnd: end,
-        label: format(start, 'dd/MM/yyyy'),
-      };
-    }
-
-    if (dateFilter === 'week') {
-      const start = startOfWeek(now, { weekStartsOn: 1 });
-      const end = endOfWeek(now, { weekStartsOn: 1 });
-      return {
-        rangeStart: start,
-        rangeEnd: end,
-        label: `${format(start, 'dd/MM')} – ${format(end, 'dd/MM')}`,
-      };
-    }
-
-    // custom date
-    const base = customDate || now;
+    const base = selectedDate || new Date();
     const start = startOfDay(base);
     const end = endOfDay(base);
+
     return {
       rangeStart: start,
       rangeEnd: end,
-      label: `Ημερομηνία: ${format(start, 'dd/MM/yyyy')}`,
+      label: format(start, 'EEE dd/MM/yyyy', { locale: el }),
     };
-  }, [dateFilter, customDate]);
+  }, [selectedDate]);
 
   // ---- Fetch sessions when profile / date range / category changes ----
   useEffect(() => {
@@ -245,7 +258,7 @@ export default function ClassesScreen() {
     try {
       let classIds: string[] | null = null;
 
-      // 1) If a specific category is selected, find the classes in that category
+      // filter by category (if not 'all')
       if (selectedCategoryId !== 'all') {
         const { data: cls, error: clsError } = await supabase
           .from('classes')
@@ -271,11 +284,30 @@ export default function ClassesScreen() {
         }
       }
 
-      // 2) Query sessions in date range
+      // sessions in date range (selected day)
       let query = supabase
         .from('class_sessions')
         .select(
-          'id, tenant_id, class_id, starts_at, ends_at, capacity, classes (title, description, category_id, drop_in_enabled, drop_in_price)'
+          `
+    id,
+    tenant_id,
+    class_id,
+    starts_at,
+    ends_at,
+    capacity,
+    cancel_before_hours,          
+    classes (
+      title,
+      description,
+      category_id,
+      drop_in_enabled,
+      drop_in_price,
+      member_drop_in_price,
+      coaches (
+        full_name
+      )
+    )
+  `,
         )
         .eq('tenant_id', profile.tenant_id)
         .gte('starts_at', rangeStart.toISOString())
@@ -298,7 +330,7 @@ export default function ClassesScreen() {
 
       const sessionsData = (data as any) || [];
 
-      // 🔹 FILTER OUT PAST SESSIONS (datetime < now)
+      // filter out past sessions
       const now = new Date();
       const upcomingSessions = sessionsData.filter((s: any) => {
         try {
@@ -317,7 +349,7 @@ export default function ClassesScreen() {
 
       setSessions(upcomingSessions);
 
-      // Remaining seats map (αν το έχεις)
+      // remaining seats map
       const remainingMap: Record<string, number | null> = {};
       for (const s of upcomingSessions) {
         if (s.capacity == null) {
@@ -341,7 +373,7 @@ export default function ClassesScreen() {
       }
       setRemainingSeats(remainingMap);
 
-      // Load booking state for each upcoming session
+      // Load booking state for each session
       const map: Record<string, { id: string; status: string } | null> = {};
       for (const s of upcomingSessions) {
         try {
@@ -362,14 +394,10 @@ export default function ClassesScreen() {
     }
   };
 
-
-
-
   const handleBook = async (sessionId: string) => {
     if (!profile) return;
     setBookingLoadingId(sessionId);
 
-    // τι status είχαμε πριν;
     const prevStatus = bookingStates[sessionId]?.status ?? null;
 
     try {
@@ -380,7 +408,6 @@ export default function ClassesScreen() {
         [sessionId]: { id: booking.id, status: booking.status },
       }));
 
-      // αν πριν ήταν null ή canceled και τώρα έγινε booked => -1 διαθέσιμη θέση
       if ((prevStatus === null || prevStatus === 'canceled') && booking.status === 'booked') {
         adjustRemaining(sessionId, -1);
       }
@@ -390,8 +417,6 @@ export default function ClassesScreen() {
       setBookingLoadingId(null);
     }
   };
-
-
 
   const handleDropIn = async (sessionId: string) => {
     if (!profile) return;
@@ -404,7 +429,7 @@ export default function ClassesScreen() {
         profile.tenant_id,
         sessionId,
         profile.id,
-        null // ή κάποια default τιμή
+        null,
       );
 
       setBookingStates((prev) => ({
@@ -422,9 +447,6 @@ export default function ClassesScreen() {
     }
   };
 
-
-
-
   const handleCancel = async (sessionId: string) => {
     const current = bookingStates[sessionId];
     if (!current) return;
@@ -440,7 +462,6 @@ export default function ClassesScreen() {
         [sessionId]: { id: updated.id, status: updated.status },
       }));
 
-      // αν ήμασταν booked και γίναμε canceled => +1 διαθέσιμη θέση
       if (prevStatus === 'booked' && updated.status === 'canceled') {
         adjustRemaining(sessionId, +1);
       }
@@ -451,28 +472,11 @@ export default function ClassesScreen() {
     }
   };
 
+  const getCategoryLabel = (cat: ClassCategory) =>
+    cat.name || (cat as any).title || 'Κατηγορία';
 
-
-  const handleCustomDateChange = (
-    event: DateTimePickerEvent,
-    selectedDate?: Date,
-  ) => {
-    if (event.type === 'dismissed') {
-      setShowDatePicker(false);
-      return;
-    }
-
-    const currentDate = selectedDate || customDate;
-    setCustomDate(currentDate);
-
-    // Close automatically on Android, keep open on iOS if you want
-    if (Platform.OS === 'android') {
-      setShowDatePicker(false);
-    }
-  };
-
-
-  const renderItem = ({ item }: { item: ClassSession }) => {
+  // helper: render a single SessionCard for a session
+  const renderSessionCard = (item: ClassSession) => {
     const start = parseISO(item.starts_at);
     const timeStr = format(start, 'EEE dd/MM · HH:mm', { locale: el });
     const title = item.classes?.title ?? 'Μάθημα';
@@ -480,60 +484,185 @@ export default function ClassesScreen() {
     const booking = bookingStates[item.id] ?? null;
     const isLoading = bookingLoadingId === item.id;
     const bookingStatus = booking?.status ?? null;
-    const isPast = start < new Date();
+
+    const rawDropInEnabled = item.classes?.drop_in_enabled ?? false;
+
+    const baseDropInPrice = item.classes?.drop_in_price ?? null;
+    const memberDropInPrice = item.classes?.member_drop_in_price ?? null;
+
+    // έχει ενεργή συνδρομή (όποιο πλάνο, δεν μας νοιάζει η κατηγορία εδώ)
+    const hasActiveMembership =
+      !!activeMembership && activeMembership.status === 'active';
+
+    // Αν έχει ενεργή συνδρομή και ορίζεται member_drop_in_price -> πάρε αυτό,
+    // αλλιώς πάρε την κλασική drop_in_price
+    const dropInPrice =
+      hasActiveMembership && memberDropInPrice != null
+        ? memberDropInPrice
+        : baseDropInPrice;
+
+    // όριο οφειλής από profile.max_dropin_debt
+    const maxDropInDebt = (profile as any)?.max_dropin_debt ?? null;
+    const hasDebtLimit =
+      maxDropInDebt !== null && maxDropInDebt !== undefined;
+
+    // αν έχει οφειλή drop-in πάνω από το όριο → κλείδωμα drop-in
+    const dropInDebtLimitExceeded =
+      hasDebtLimit && dropInDebt >= Number(maxDropInDebt);
+
+    // τελικό αν επιτρέπεται drop-in για αυτό το μάθημα
+    const dropInEnabled = rawDropInEnabled && !dropInDebtLimitExceeded;
+
+    // ❌ Disable cancel when we are inside the "cancel_before_hours" window
+    const cancelBeforeHours = item.cancel_before_hours ?? null;
+    let cancelDisabled = false;
+
+    if (cancelBeforeHours != null) {
+      const now = new Date();
+      const diffMs = start.getTime() - now.getTime(); // πόσο πριν την έναρξη
+      const diffHours = diffMs / (1000 * 60 * 60);
+
+      // Αν μένουν λιγότερες ώρες από το όριο, δεν επιτρέπεται ακύρωση
+      if (diffHours < cancelBeforeHours) {
+        cancelDisabled = true;
+      }
+    }
+
+    let categoryLabel: string | null = null;
+    let categoryColor: string | null = null;
+    if (item.classes?.category_id) {
+      const catRow = categories.find(
+        (c: ClassCategory) => String(c.id) === String(item.classes!.category_id),
+      );
+      if (catRow) {
+        categoryLabel = getCategoryLabel(catRow);
+        categoryColor = catRow.color ?? null;
+      }
+    }
 
     const classCategoryId = item.classes?.category_id ?? null;
-
-    // category του membership από το membership_plans
-    const membershipCategoryId =
-      activeMembership?.membership_plans?.category_id ?? null;
-
+    const membershipCategoryIds =
+      activeMembership?.plan_category_ids ?? [];
 
     let canBookWithMembership = false;
 
     if (activeMembership && activeMembership.status === 'active') {
-      if (membershipCategoryId == null) {
-        // plan χωρίς category => ισχύει για όλα
+      if (membershipCategoryIds.length === 0) {
+        // πλάνο χωρίς κατηγορίες → ισχύει για όλα τα μαθήματα
         canBookWithMembership = true;
       } else if (classCategoryId == null) {
-        // μάθημα χωρίς κατηγορία αλλά υπάρχει membership => το αφήνουμε
+        // μάθημα χωρίς κατηγορία → το αφήνουμε να περνάει
         canBookWithMembership = true;
       } else {
-        canBookWithMembership =
-          String(membershipCategoryId) === String(classCategoryId);
+        // μάθημα επιτρέπεται αν η κατηγορία του είναι μέσα στις κατηγορίες του πλάνου
+        canBookWithMembership = membershipCategoryIds.some(
+          (cid) => String(cid) === String(classCategoryId),
+        );
       }
     }
 
     const remaining = remainingSeats[item.id] ?? null;
 
-    const dropInEnabled = item.classes?.drop_in_enabled ?? false;
-    const dropInPrice = item.classes?.drop_in_price ?? null;
-
     return (
       <SessionCard
+        key={item.id}
         title={title}
         description={description}
         timeLabel={timeStr}
         capacity={item.capacity}
-        remainingSeats={remainingSeats[item.id] ?? null}
+        remainingSeats={remaining}
         bookingStatus={bookingStatus}
         isLoading={isLoading}
         canBookWithMembership={canBookWithMembership}
         dropInEnabled={dropInEnabled}
-        dropInPrice={dropInPrice}          // 👈 pass price
+        dropInPrice={dropInPrice}
         onBook={() => handleBook(item.id)}
         onCancel={() => handleCancel(item.id)}
         onDropIn={() => handleDropIn(item.id)}
+        cancelDisabled={cancelDisabled}
+        cancelBeforeHours={cancelBeforeHours}
+        categoryLabel={categoryLabel}
+        categoryColor={categoryColor}
+        startAt={item.starts_at}
+        endAt={item.ends_at}
+        coachName={item.classes?.coaches?.full_name ?? null}
       />
     );
   };
 
+  // group sessions by time of day
+  const groupedSessions = useMemo(() => {
+    const morning: ClassSession[] = [];
+    const afternoon: ClassSession[] = [];
+    const evening: ClassSession[] = [];
 
+    sessions.forEach((s) => {
+      try {
+        const d = parseISO(s.starts_at);
+        const hour = d.getHours(); // local hour
 
+        if (hour >= 6 && hour < 13) {
+          morning.push(s);
+        } else if (hour >= 13 && hour < 17) {
+          afternoon.push(s);
+        } else {
+          // 17:00–00:00 (και οτιδήποτε άλλο πέφτει εκτός, το βάζουμε εδώ)
+          evening.push(s);
+        }
+      } catch {
+        evening.push(s);
+      }
+    });
 
-  // Labels for category chips
-  const getCategoryLabel = (cat: ClassCategory) =>
-    cat.name || cat.title || 'Κατηγορία';
+    return { morning, afternoon, evening };
+  }, [sessions]);
+
+  const renderAccordionSection = (
+    title: string,
+    subtitle: string,
+    list: ClassSession[],
+    isOpen: boolean,
+    toggle: () => void,
+  ) => (
+    <View style={styles.accordionSection}>
+      <TouchableOpacity
+        style={styles.accordionHeader}
+        onPress={toggle}
+        activeOpacity={0.8}
+      >
+        <View>
+          <Text style={styles.accordionTitle}>{title}</Text>
+          <Text style={styles.accordionSubtitle}>{subtitle}</Text>
+        </View>
+        <View style={styles.accordionRight}>
+          <Text style={styles.accordionCount}>
+            {list.length} μαθήματα
+          </Text>
+          {isOpen ? (
+            <ChevronDown size={18} color={colors.text} />
+          ) : (
+            <ChevronRight size={18} color={colors.text} />
+          )}
+        </View>
+      </TouchableOpacity>
+
+      {isOpen && (
+        <View style={styles.accordionBody}>
+          {list.length === 0 ? (
+            <Text style={styles.accordionEmpty}>
+              Δεν υπάρχουν μαθήματα σε αυτή τη ζώνη.
+            </Text>
+          ) : (
+            list.map((s) => (
+              <View key={s.id} style={styles.sessionWrapper}>
+                {renderSessionCard(s)}
+              </View>
+            ))
+          )}
+        </View>
+      )}
+    </View>
+  );
 
   return (
     <View style={styles.container}>
@@ -548,89 +677,33 @@ export default function ClassesScreen() {
         </View>
       )}
 
-
       {/* Header row */}
       <View style={styles.headerRow}>
-        <Text style={styles.headerTitle}>Μαθήματα</Text>
+        <Text style={styles.headerTitle}>Τμήματα</Text>
         <Text style={styles.headerSubtitle}>{label}</Text>
       </View>
 
-
-            {/* Date filter row */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Ημέρα</Text>
-        <View style={styles.chipRow}>
-          {(['today', 'week', 'custom'] as DateFilterMode[]).map((mode) => {
-            const isActive = dateFilter === mode;
-            let text = 'Σήμερα';
-            if (mode === 'week') text = 'Αυτή την εβδομάδα';
-            if (mode === 'custom') text = 'Ημερομηνία';
-
-            return (
-              <TouchableOpacity
-                key={mode}
-                style={[styles.chip, isActive && styles.chipActive]}
-                onPress={() => {
-                  setDateFilter(mode);
-                  if (mode === 'custom') {
-                    setShowDatePicker(true);
-                  }
-                }}
-              >
-                <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                  {text}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
+      {/* Week date filter */}
+      <WeekDateFilter
+        selectedDate={selectedDate}
+        onChange={setSelectedDate}
+      />
 
       {/* Categories row */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Κατηγορίες</Text>
-        <FlatList
-          horizontal
-          data={[{ id: 'all', label: 'Όλες' }, ...categories]}
-          keyExtractor={(item: any) => item.id}
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.chipRow}
-          renderItem={({ item }: any) => {
-            const isAll = item.id === 'all';
-            const isActive = selectedCategoryId === item.id;
-            const labelText = isAll ? item.label : getCategoryLabel(item);
-
-            return (
-              <TouchableOpacity
-                style={[styles.chip, isActive && styles.chipActive]}
-                onPress={() => setSelectedCategoryId(item.id)}
-              >
-                <Text
-                  style={[styles.chipText, isActive && styles.chipTextActive]}
-                >
-                  {labelText}
-                </Text>
-              </TouchableOpacity>
-            );
-          }}
-        />
-      </View>
-
-
-
-
-      {dateFilter === 'custom' && showDatePicker && (
-        <DateTimePicker
-          value={customDate}
-          mode="date"
-          textColor="white"
-          themeVariant="dark"
-          display={Platform.OS === 'ios' ? 'default' : 'default'}
-          onChange={handleCustomDateChange}
+      {categories.length > 0 && (
+        <CategoryFilter
+          title="Κατηγορίες"
+          items={[{ id: 'all', label: 'Όλες' }, ...categories]}
+          selectedId={selectedCategoryId}
+          onChange={(id) => setSelectedCategoryId(id)}
+          getLabel={(item: any) =>
+            item.id === 'all' ? item.label : getCategoryLabel(item)
+          }
+          showReset={true}
         />
       )}
 
-      {/* Sessions list */}
+      {/* Sessions – accordion layout */}
       <View style={{ flex: 1, marginTop: 8 }}>
         {loading ? (
           <View style={styles.center}>
@@ -639,24 +712,45 @@ export default function ClassesScreen() {
         ) : sessions.length === 0 ? (
           <View style={styles.center}>
             <Text style={styles.emptyText}>
-              Δεν υπάρχουν μαθήματα για αυτή την περίοδο.
+              Δεν υπάρχουν μαθήματα για αυτή την ημέρα.
             </Text>
           </View>
         ) : (
-          <FlatList
-            data={sessions}
-            keyExtractor={(item) => item.id}
-            renderItem={renderItem}
+          <ScrollView
             contentContainerStyle={{ paddingBottom: 24 }}
             showsVerticalScrollIndicator={false}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
-          />
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={handleRefresh}
+                tintColor={colors.accent}
+              />
+            }
+          >
+            {renderAccordionSection(
+              'Πρωινά',
+              '06:00 – 13:00',
+              groupedSessions.morning,
+              showMorning,
+              () => setShowMorning((v) => !v),
+            )}
+            {renderAccordionSection(
+              'Απόγευμα',
+              '13:00 – 17:00',
+              groupedSessions.afternoon,
+              showAfternoon,
+              () => setShowAfternoon((v) => !v),
+            )}
+            {renderAccordionSection(
+              'Βραδινά',
+              '17:00 – 00:00',
+              groupedSessions.evening,
+              showEvening,
+              () => setShowEvening((v) => !v),
+            )}
+          </ScrollView>
         )}
       </View>
-
-
-
     </View>
   );
 }
@@ -691,46 +785,6 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textMuted,
       fontSize: 13,
     },
-    section: {
-      marginTop: 8,
-      marginBottom: 4,
-    },
-    sectionTitle: {
-      color: colors.text,
-      fontSize: 14,
-      fontWeight: '600',
-      marginBottom: 6,
-    },
-    chipRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-    },
-    chip: {
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: 999,
-      borderWidth: 1,
-      borderColor: colors.textMuted,
-      marginRight: 8,
-      backgroundColor: colors.bg,
-    },
-    chipActive: {
-      backgroundColor: colors.primary,
-      borderColor: colors.primary,
-    },
-    chipText: {
-      fontSize: 13,
-      color: colors.textMuted,
-    },
-    chipTextActive: {
-      color: '#fff',
-      fontWeight: '600',
-    },
-    rangeLabel: {
-      marginTop: 4,
-      fontSize: 12,
-      color: colors.textMuted,
-    },
     center: {
       flex: 1,
       justifyContent: 'center',
@@ -739,5 +793,52 @@ const makeStyles = (colors: ThemeColors) =>
     emptyText: {
       color: colors.textMuted,
       textAlign: 'center',
+    },
+    // Accordion styles
+    accordionSection: {
+      borderRadius: 10,
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      backgroundColor: colors.card,
+      marginBottom: 10,
+      overflow: 'hidden',
+    },
+    accordionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    accordionTitle: {
+      color: colors.text,
+      fontSize: 15,
+      fontWeight: '600',
+    },
+    accordionSubtitle: {
+      marginTop: 2,
+      color: colors.textMuted,
+      fontSize: 12,
+    },
+    accordionRight: {
+      flexDirection: 'row',
+      alignItems: 'center',
+    },
+    accordionCount: {
+      color: colors.textMuted,
+      fontSize: 12,
+      marginRight: 8,
+    },
+    accordionBody: {
+      paddingHorizontal: 12,
+      paddingBottom: 10,
+    },
+    accordionEmpty: {
+      color: colors.textMuted,
+      fontSize: 13,
+      marginTop: 4,
+    },
+    sessionWrapper: {
+      marginTop: 8,
     },
   });

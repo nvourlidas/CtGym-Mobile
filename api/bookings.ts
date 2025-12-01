@@ -91,6 +91,7 @@ type RawSessionRow = {
   starts_at: string;
   ends_at: string | null;
   capacity: number | null;
+  cancel_before_hours?: number | null;
   classes: {
     title: string;
     description?: string | null;
@@ -108,6 +109,7 @@ export type MyBooking = {
     capacity: number | null;
     class_title: string | null;
     class_description: string | null;
+    cancel_before_hours?: number | null;
   } | null;
 };
 
@@ -146,7 +148,7 @@ export const getMyBookings = async (userId: string): Promise<MyBooking[]> => {
 
   const { data: sessions, error: sessionsError } = await supabase
     .from('class_sessions')
-    .select('id, starts_at, ends_at, capacity, classes:classes ( title, description )')
+    .select('id, starts_at, ends_at, capacity, cancel_before_hours, classes:classes ( title, description )')
     .in('id', sessionIds);
 
 
@@ -172,6 +174,7 @@ export const getMyBookings = async (userId: string): Promise<MyBooking[]> => {
           capacity: session.capacity,
           class_title: session.classes?.title ?? null,
           class_description: session.classes?.description ?? null,
+          cancel_before_hours: session.cancel_before_hours ?? null,
         }
         : null,
     };

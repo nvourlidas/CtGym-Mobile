@@ -55,6 +55,8 @@ export default function MyBookingsScreen() {
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+
+
   const loadBookings = useCallback(async () => {
     if (!profile?.id) return;
     try {
@@ -117,13 +119,46 @@ export default function MyBookingsScreen() {
     }
   };
 
-  // cancel button μόνο αν το session είναι στο μέλλον
-  const canCancel = (booking: MyBooking) => {
-    if (!booking.session) return false;
-    if (booking.status !== 'booked') return false;
+  // Πλήρης λογική ακύρωσης για κάθε booking
+  const getCancelState = (booking: MyBooking) => {
+    // Default: no button
+    if (!booking.session) {
+      return { show: false, disabled: true };
+    }
+
+    if (booking.status !== 'booked') {
+      return { show: false, disabled: true };
+    }
+
     const start = parseISO(booking.session.starts_at);
-    return isAfter(start, new Date());
+    const now = new Date();
+
+    // Αν το μάθημα είναι ήδη στο παρελθόν → δεν δείχνουμε καν κουμπί
+    if (!isAfter(start, now)) {
+      return { show: false, disabled: true };
+    }
+
+    
+    const cancelBefore = booking.session.cancel_before_hours ?? null;
+
+
+    // Αν δεν υπάρχει όριο, απλά δείχνουμε ενεργό κουμπί
+    if (cancelBefore == null) {
+      return { show: true, disabled: false };
+    }
+
+    const diffMs = start.getTime() - now.getTime();
+    const diffHours = diffMs / (1000 * 60 * 60);
+
+    // Αν μένουν λιγότερες ώρες από το όριο → κουμπί ορατό αλλά disabled
+    if (diffHours < cancelBefore) {
+      return { show: true, disabled: true };
+    }
+
+    // Κανονικά: μπορούμε να ακυρώσουμε
+    return { show: true, disabled: false };
   };
+
 
   const handleCancel = async (booking: MyBooking) => {
     if (!booking.session) return;
@@ -244,7 +279,10 @@ export default function MyBookingsScreen() {
     const classTitle = session.class_title ?? 'Μάθημα';
     const description = session.class_description ?? null;
 
-    const isCancelable = canCancel(item);
+    const cancelBefore = session.cancel_before_hours ?? null;
+    const { show, disabled: cancelDisabled } = getCancelState(item);
+    const isBooked = item.status === 'booked';
+
 
     return (
       <View style={styles.card}>
@@ -275,18 +313,49 @@ export default function MyBookingsScreen() {
             {format(parseISO(item.created_at), 'dd/MM/yyyy', { locale: el })}
           </Text>
 
-          {isCancelable && (
+          {show && (
             <TouchableOpacity
-              style={styles.cancelButton}
-              onPress={() => handleCancel(item)}
-              disabled={updatingId === item.id}
+              style={[
+                styles.cancelButton,
+                (cancelDisabled || updatingId === item.id) && styles.cancelButtonDisabled,
+              ]}
+              onPress={() => {
+                if (!cancelDisabled && updatingId !== item.id) {
+                  handleCancel(item);
+                }
+              }}
+              disabled={cancelDisabled || updatingId === item.id}
             >
-              <Text style={styles.cancelButtonText}>
-                {updatingId === item.id ? 'Ακύρωση…' : 'Ακύρωση'}
+              <Text
+                style={[
+                  styles.cancelButtonText,
+                  cancelDisabled && { opacity: 0.7 },
+                ]}
+              >
+                {updatingId === item.id
+                  ? 'Ακύρωση…'
+                  : cancelDisabled
+                    ? 'Δεν μπορεί να ακυρωθεί'
+                    : 'Ακύρωση'}
               </Text>
             </TouchableOpacity>
           )}
+
+
         </View>
+
+        {show && cancelDisabled && (
+          <Text
+            style={{
+              marginTop: 4,
+              fontSize: 12,
+              color: colors.textMuted,
+            }}
+          >
+            Δεν μπορεί να ακυρωθεί, έχει περάσει το όριο ακύρωσης.
+          </Text>
+        )}
+
       </View>
     );
   };
@@ -316,7 +385,7 @@ export default function MyBookingsScreen() {
   }
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+    <View style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={styles.container}>
         {/* Header row όπως στο ClassesScreen */}
         <View style={styles.headerRow}>
@@ -371,7 +440,7 @@ export default function MyBookingsScreen() {
         </View>
 
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -543,5 +612,10 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: '600',
       color: colors.error ?? '#ef4444',
     },
+
+    cancelButtonDisabled: {
+      opacity: 0.4,
+    },
+
 
   });

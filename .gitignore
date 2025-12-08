@@ -42,3 +42,4 @@ yarn-error.*
 .env
 
 ctgym-259bd-firebase-adminsdk-fbsvc-66daaa8142.json
+google-services.json

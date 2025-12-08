@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "666322346952",
+    "project_id": "ctgym-259bd",
+    "storage_bucket": "ctgym-259bd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:666322346952:android:f43d8802389e2733d696fd",
+        "android_client_info": {
+          "package_name": "com.nvourlidas.ctgym"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDvIGda8Gh3ivrNdRbqHBwN2LpiZGKknug"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

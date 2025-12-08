@@ -1,4 +1,3 @@
-// src/components/SessionCard.tsx
 import React, { useState, useMemo } from 'react';
 import {
   View,
@@ -24,9 +23,9 @@ type SessionCardProps = {
   canBookWithMembership: boolean;
   dropInEnabled: boolean;
   dropInPrice: number | null;
-  onBook: () => void;
-  onCancel: () => void;
-  onDropIn: () => void;
+  onBook: () => Promise<void> | void; // can be async or sync
+  onCancel: () => Promise<void> | void;
+  onDropIn: () => Promise<void> | void;
   cancelDisabled?: boolean;
   cancelBeforeHours?: number | null;
   categoryLabel?: string | null;
@@ -63,7 +62,8 @@ export default function SessionCard({
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [confirmText, setConfirmText] = useState('');
-  const [detailsVisible, setDetailsVisible] = useState(false); // 👈 NEW
+  const [detailsVisible, setDetailsVisible] = useState(false);
+  const [noSessionsVisible, setNoSessionsVisible] = useState(false); // 👈 NEW
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -131,22 +131,36 @@ ${dropInPrice.toFixed(2)}€`
     setConfirmVisible(true);
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
     if (!pendingAction) {
       setConfirmVisible(false);
       return;
     }
 
-    if (pendingAction === 'book') {
-      onBook();
-    } else if (pendingAction === 'cancel') {
-      onCancel();
-    } else if (pendingAction === 'dropin') {
-      onDropIn();
-    }
+    try {
+      if (pendingAction === 'book') {
+        await onBook();
+      } else if (pendingAction === 'cancel') {
+        await onCancel();
+      } else if (pendingAction === 'dropin') {
+        await onDropIn();
+      }
+    } catch (err: any) {
+      const code = err?.code ?? '';
+      const msg = err?.message ?? '';
 
-    setConfirmVisible(false);
-    setPendingAction(null);
+      // 👇 Detect the Postgres / Supabase error from the RPC
+      if (
+        code === 'no_remaining_sessions' ||
+        msg.includes('no_remaining_sessions')
+      ) {
+        setNoSessionsVisible(true);
+      }
+      // (other errors can be handled in the parent or with a generic Alert)
+    } finally {
+      setConfirmVisible(false);
+      setPendingAction(null);
+    }
   };
 
   const handleCancelConfirm = () => {
@@ -361,7 +375,7 @@ ${dropInPrice.toFixed(2)}€`
         </View>
       </Modal>
 
-      {/* Details Modal (Title / Category / Coach / Full description) */}
+      {/* Details Modal */}
       <Modal
         transparent
         visible={detailsVisible}
@@ -408,6 +422,34 @@ ${dropInPrice.toFixed(2)}€`
                 onPress={() => setDetailsVisible(false)}
               >
                 <Text style={styles.modalButtonPrimaryText}>Κλείσιμο</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* 👇 NEW: No remaining sessions warning */}
+      <Modal
+        transparent
+        visible={noSessionsVisible}
+        animationType="fade"
+        onRequestClose={() => setNoSessionsVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalBox}>
+            <Text style={styles.modalTitle}>Δεν έχετε διαθέσιμες συνεδρίες</Text>
+            <Text style={styles.modalText}>
+              Η συνδρομή σας δεν έχει διαθέσιμες συνεδρίες. 
+              Ανανεώστε το πακέτο σας ή επικοινωνήστε με τη γραμματεία πριν
+              κλείσετε νέο μάθημα.
+            </Text>
+
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity
+                style={[styles.modalButton, styles.modalButtonPrimary]}
+                onPress={() => setNoSessionsVisible(false)}
+              >
+                <Text style={styles.modalButtonPrimaryText}>ΟΚ</Text>
               </TouchableOpacity>
             </View>
           </View>

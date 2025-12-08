@@ -412,7 +412,7 @@ export default function ClassesScreen() {
         adjustRemaining(sessionId, -1);
       }
     } catch (err) {
-      console.log('book error', err);
+      throw err;
     } finally {
       setBookingLoadingId(null);
     }

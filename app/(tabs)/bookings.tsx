@@ -571,7 +571,7 @@ const makeStyles = (colors: ThemeColors) =>
       color: '#000',
     },
     statusBooked: {
-      backgroundColor: colors.accent ?? colors.primary,
+      backgroundColor: colors.primary ?? colors.primary,
     },
     statusCheckedIn: {
       backgroundColor: colors.success,

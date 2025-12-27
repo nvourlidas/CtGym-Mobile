@@ -8,6 +8,7 @@ import {
   StyleSheet,
   Keyboard,
   TouchableWithoutFeedback,
+  Image,
 } from 'react-native';
 import { useAuth } from '../context/AuthProvider';
 import { colors } from '../lib/theme';
@@ -20,19 +21,26 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const logo = require('../assets/PNG/ios-dark_icon.png');
+
   const handleLogin = async () => {
     setErrorMsg(null);
     setLoading(true);
     const { error } = await signIn(email.trim(), password);
     setLoading(false);
-     router.replace('/'); 
+    router.replace('/');
     if (error) setErrorMsg(error);
   };
 
   return (
     <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
       <View style={styles.container}>
-        <Text style={styles.title}>Cloudtec Gym</Text>
+        <Image
+          source={logo}
+          style={styles.logo}
+          resizeMode="contain"
+          accessibilityLabel="Cloudtec Gym logo"
+        />
         <Text style={styles.subtitle}>Είσοδος Μέλους</Text>
 
         <View style={styles.card}>
@@ -134,4 +142,11 @@ const styles = StyleSheet.create({
     marginTop: 16,
     fontWeight: '600',
   },
+
+  logo: {
+    width: 320,
+    height: 220,
+    alignSelf: 'center',
+  },
+
 });

@@ -29,6 +29,8 @@ import {
 } from 'date-fns';
 import { el } from 'date-fns/locale';
 import { useFocusEffect } from '@react-navigation/native';
+import { Calendar } from 'react-native-calendars';
+
 
 import { useAuth } from '../../context/AuthProvider';
 import { useTheme, ThemeColors } from '../../context/ThemeProvider';
@@ -39,11 +41,14 @@ import {
 } from '../../api/bookings';
 
 type FilterMode = 'all' | 'today' | 'week' | 'date';
+type TabKey = 'list' | 'calendar';
 
 export default function MyBookingsScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  const [activeTab, setActiveTab] = useState<TabKey>('calendar');
 
   const [bookings, setBookings] = useState<MyBooking[]>([]);
   const [loading, setLoading] = useState(true);
@@ -51,11 +56,13 @@ export default function MyBookingsScreen() {
   const [error, setError] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
-  const [filter, setFilter] = useState<FilterMode>('all');
+  const [filter, setFilter] = useState<FilterMode>('today');
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
-
+  const [agendaSelected, setAgendaSelected] = useState(
+    format(new Date(), 'yyyy-MM-dd'),
+  );
 
   const loadBookings = useCallback(async () => {
     if (!profile?.id) return;
@@ -72,12 +79,10 @@ export default function MyBookingsScreen() {
     }
   }, [profile?.id]);
 
-  // Initial load
   useEffect(() => {
     loadBookings();
   }, [loadBookings]);
 
-  // Reload κάθε φορά που ανοίγει το tab / παίρνει focus
   useFocusEffect(
     useCallback(() => {
       loadBookings();
@@ -119,46 +124,26 @@ export default function MyBookingsScreen() {
     }
   };
 
-  // Πλήρης λογική ακύρωσης για κάθε booking
   const getCancelState = (booking: MyBooking) => {
-    // Default: no button
-    if (!booking.session) {
-      return { show: false, disabled: true };
-    }
-
-    if (booking.status !== 'booked') {
-      return { show: false, disabled: true };
-    }
+    if (!booking.session) return { show: false, disabled: true };
+    if (booking.status !== 'booked') return { show: false, disabled: true };
 
     const start = parseISO(booking.session.starts_at);
     const now = new Date();
 
-    // Αν το μάθημα είναι ήδη στο παρελθόν → δεν δείχνουμε καν κουμπί
-    if (!isAfter(start, now)) {
-      return { show: false, disabled: true };
-    }
+    if (!isAfter(start, now)) return { show: false, disabled: true };
 
-    
     const cancelBefore = booking.session.cancel_before_hours ?? null;
 
-
-    // Αν δεν υπάρχει όριο, απλά δείχνουμε ενεργό κουμπί
-    if (cancelBefore == null) {
-      return { show: true, disabled: false };
-    }
+    if (cancelBefore == null) return { show: true, disabled: false };
 
     const diffMs = start.getTime() - now.getTime();
     const diffHours = diffMs / (1000 * 60 * 60);
 
-    // Αν μένουν λιγότερες ώρες από το όριο → κουμπί ορατό αλλά disabled
-    if (diffHours < cancelBefore) {
-      return { show: true, disabled: true };
-    }
+    if (diffHours < cancelBefore) return { show: true, disabled: true };
 
-    // Κανονικά: μπορούμε να ακυρώσουμε
     return { show: true, disabled: false };
   };
-
 
   const handleCancel = async (booking: MyBooking) => {
     if (!booking.session) return;
@@ -178,7 +163,7 @@ export default function MyBookingsScreen() {
     }
   };
 
-  // ----------- ΦΙΛΤΡΑ ΗΜΕΡΟΜΗΝΙΩΝ + LABEL -----------
+  // ----------- LIST FILTERS -----------
 
   const filteredBookings = useMemo(() => {
     if (filter === 'all') return bookings;
@@ -221,14 +206,8 @@ export default function MyBookingsScreen() {
   const rangeLabel = useMemo(() => {
     const now = new Date();
 
-    if (filter === 'all') {
-      return 'Όλες οι κρατήσεις';
-    }
-
-    if (filter === 'today') {
-      const start = startOfDay(now);
-      return format(start, 'dd/MM/yyyy');
-    }
+    if (filter === 'all') return 'Όλες οι κρατήσεις';
+    if (filter === 'today') return format(startOfDay(now), 'dd/MM/yyyy');
 
     if (filter === 'week') {
       const start = startOfWeek(now, { weekStartsOn: 1 });
@@ -236,7 +215,6 @@ export default function MyBookingsScreen() {
       return `${format(start, 'dd/MM')} – ${format(end, 'dd/MM')}`;
     }
 
-    // date
     const base = selectedDate ?? now;
     return `Ημερομηνία: ${format(base, 'dd/MM/yyyy')}`;
   }, [filter, selectedDate]);
@@ -250,17 +228,15 @@ export default function MyBookingsScreen() {
     }
   };
 
-  const renderFilterChip = (mode: FilterMode | 'all', label: string) => {
+  const renderFilterChip = (mode: FilterMode, label: string) => {
     const active = filter === mode;
     return (
       <TouchableOpacity
         key={mode}
         style={[styles.chip, active && styles.chipActive]}
         onPress={() => {
-          if (mode === 'date') {
-            setShowDatePicker(true);
-          }
-          setFilter(mode as FilterMode);
+          if (mode === 'date') setShowDatePicker(true);
+          setFilter(mode);
         }}
       >
         <Text style={[styles.chipText, active && styles.chipTextActive]}>
@@ -270,7 +246,9 @@ export default function MyBookingsScreen() {
     );
   };
 
-  const renderItem = ({ item }: { item: MyBooking }) => {
+  // ----------- SHARED CARD RENDER (List + Agenda) -----------
+
+  const renderBookingCard = (item: MyBooking) => {
     const session = item.session;
     if (!session) return null;
 
@@ -279,34 +257,27 @@ export default function MyBookingsScreen() {
     const classTitle = session.class_title ?? 'Μάθημα';
     const description = session.class_description ?? null;
 
-    const cancelBefore = session.cancel_before_hours ?? null;
     const { show, disabled: cancelDisabled } = getCancelState(item);
-    const isBooked = item.status === 'booked';
-
 
     return (
       <View style={styles.card}>
-        {/* Τίτλος αριστερά – Ημερομηνία/ώρα δεξιά */}
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>{classTitle}</Text>
           <Text style={styles.cardTime}>{dateStr}</Text>
         </View>
 
-        {/* Status badge σε δική του σειρά */}
         <View style={styles.statusRow}>
           <View style={[styles.statusBadge, getStatusStyle(item.status)]}>
             <Text style={styles.statusText}>{getStatusLabel(item.status)}</Text>
           </View>
         </View>
 
-        {/* Περιγραφή μαθήματος */}
         {!!description && (
           <Text style={styles.cardDescription} numberOfLines={3}>
             {description}
           </Text>
         )}
 
-        {/* Footer με ημερομηνία κράτησης + button κάτω */}
         <View style={styles.cardFooter}>
           <Text style={styles.footerText}>
             Κράτηση:{' '}
@@ -317,7 +288,8 @@ export default function MyBookingsScreen() {
             <TouchableOpacity
               style={[
                 styles.cancelButton,
-                (cancelDisabled || updatingId === item.id) && styles.cancelButtonDisabled,
+                (cancelDisabled || updatingId === item.id) &&
+                styles.cancelButtonDisabled,
               ]}
               onPress={() => {
                 if (!cancelDisabled && updatingId !== item.id) {
@@ -340,8 +312,6 @@ export default function MyBookingsScreen() {
               </Text>
             </TouchableOpacity>
           )}
-
-
         </View>
 
         {show && cancelDisabled && (
@@ -355,11 +325,81 @@ export default function MyBookingsScreen() {
             Δεν μπορεί να ακυρωθεί, έχει περάσει το όριο ακύρωσης.
           </Text>
         )}
-
       </View>
     );
   };
 
+  const renderListItem = ({ item }: { item: MyBooking }) => renderBookingCard(item);
+
+  // ----------- CALENDAR (Agenda) -----------
+
+  const agendaItems = useMemo(() => {
+    const map: Record<string, MyBooking[]> = {};
+
+    for (const b of bookings) {
+      if (!b.session) continue;
+      const key = format(parseISO(b.session.starts_at), 'yyyy-MM-dd');
+      if (!map[key]) map[key] = [];
+      map[key].push(b);
+    }
+
+    // sort by time in each day
+    Object.keys(map).forEach(k => {
+      map[k].sort((a, b) => {
+        const aT = parseISO(a.session!.starts_at).getTime();
+        const bT = parseISO(b.session!.starts_at).getTime();
+        return aT - bT;
+      });
+    });
+
+    return map;
+  }, [bookings]);
+
+  const markedDatesBase = useMemo(() => {
+    const marks: Record<string, any> = {};
+    Object.keys(agendaItems).forEach(dateKey => {
+      marks[dateKey] = { marked: true, dotColor: colors.accent };
+    });
+    return marks;
+  }, [agendaItems, colors.accent]);
+
+  const markedDates = useMemo(() => {
+    return {
+      ...markedDatesBase,
+      [agendaSelected]: {
+        ...(markedDatesBase[agendaSelected] ?? {}),
+        selected: true,
+        selectedColor: colors.primary,
+      },
+    };
+  }, [markedDatesBase, agendaSelected, colors.primary]);
+
+  const dayBookings = useMemo(() => {
+    return agendaItems[agendaSelected] ?? [];
+  }, [agendaItems, agendaSelected]);
+
+
+
+  const calendarTheme = useMemo(
+    () => ({
+      backgroundColor: colors.bg,
+      calendarBackground: colors.bg,
+      textSectionTitleColor: colors.textMuted,
+      dayTextColor: colors.text,
+      monthTextColor: colors.text,
+      selectedDayBackgroundColor: colors.primary,
+      selectedDayTextColor: '#fff',
+      todayTextColor: colors.accent,
+      dotColor: colors.accent,
+      selectedDotColor: '#fff',
+      arrowColor: colors.accent,
+    }),
+    [colors.bg, colors.textMuted, colors.text, colors.primary, colors.accent],
+  );
+
+
+
+  // ----------- GUARDS -----------
 
   if (!profile?.id) {
     return (
@@ -384,63 +424,147 @@ export default function MyBookingsScreen() {
     );
   }
 
+  // ----------- UI -----------
+
+  const headerSubtitle =
+    activeTab === 'list' ? rangeLabel : 'Όλες οι κρατήσεις';
+
   return (
-    <View style={{ flex: 1, backgroundColor: colors.bg }}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={styles.container}>
-        {/* Header row όπως στο ClassesScreen */}
         <View style={styles.headerRow}>
           <Text style={styles.headerTitle}>Οι κρατήσεις μου</Text>
-          <Text style={styles.headerSubtitle}>{rangeLabel}</Text>
+          <Text style={styles.headerSubtitle}>{headerSubtitle}</Text>
         </View>
 
-        {/* Φίλτρα ημερομηνίας σαν chips */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Φίλτρο</Text>
-          <View style={styles.chipRow}>
-            {renderFilterChip('all', 'Όλα')}
-            {renderFilterChip('today', 'Σήμερα')}
-            {renderFilterChip('week', 'Εβδομάδα')}
-            {renderFilterChip('date', 'Ημερομηνία')}
-          </View>
+        {/* Tabs */}
+        <View style={styles.tabBar}>
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'list' && styles.tabActive]}
+            onPress={() => setActiveTab('list')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                activeTab === 'list' && styles.tabTextActive,
+              ]}
+            >
+              Λίστα
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tab, activeTab === 'calendar' && styles.tabActive]}
+            onPress={() => setActiveTab('calendar')}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                activeTab === 'calendar' && styles.tabTextActive,
+              ]}
+            >
+              Ημερολόγιο
+            </Text>
+          </TouchableOpacity>
         </View>
-
-
-        {filter === 'date' && showDatePicker && (
-          <DateTimePicker
-            value={selectedDate ?? new Date()}
-            mode="date"
-            display='default'
-            textColor="white"
-            themeVariant="dark"
-            onChange={onChangeDate}
-          />
-        )}
 
         {error && <Text style={styles.errorText}>{error}</Text>}
 
-        <View style={{ flex: 1, marginTop: 8 }}>
-          {filteredBookings.length === 0 ? (
-            <View style={styles.center}>
-              <Text style={styles.emptyText}>
-                Δεν βρέθηκαν κρατήσεις για το επιλεγμένο φίλτρο.
-              </Text>
+        {/* TAB: LIST */}
+        {activeTab === 'list' && (
+          <>
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Φίλτρο</Text>
+              <View style={styles.chipRow}>
+                {renderFilterChip('all', 'Όλα')}
+                {renderFilterChip('today', 'Σήμερα')}
+                {renderFilterChip('week', 'Εβδομάδα')}
+                {renderFilterChip('date', 'Ημερομηνία')}
+              </View>
             </View>
-          ) : (
-            <FlatList
-              data={filteredBookings}
-              keyExtractor={item => item.id}
-              renderItem={renderItem}
-              contentContainerStyle={{ paddingBottom: 24 }}
-              refreshControl={
-                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-              }
-              showsVerticalScrollIndicator={false}
-            />
-          )}
-        </View>
 
+            {filter === 'date' && showDatePicker && (
+              <DateTimePicker
+                value={selectedDate ?? new Date()}
+                mode="date"
+                display="default"
+                textColor="white"
+                themeVariant="dark"
+                onChange={onChangeDate}
+              />
+            )}
+
+            <View style={{ flex: 1, marginTop: 8 }}>
+              {filteredBookings.length === 0 ? (
+                <View style={styles.center}>
+                  <Text style={styles.emptyText}>
+                    Δεν βρέθηκαν κρατήσεις για το επιλεγμένο φίλτρο.
+                  </Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={filteredBookings}
+                  keyExtractor={item => item.id}
+                  renderItem={renderListItem}
+                  contentContainerStyle={{ paddingBottom: 24 }}
+                  refreshControl={
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                  }
+                  showsVerticalScrollIndicator={false}
+                />
+              )}
+            </View>
+          </>
+        )}
+
+        {/* TAB: CALENDAR */}
+        {activeTab === 'calendar' && (
+          <View style={{ flex: 1, marginTop: 8 }}>
+            <View style={styles.calendarWrap}>
+              <View style={{ flex: 1, marginTop: 8 }}>
+                {/* Calendar */}
+                <View style={styles.calendarCard}>
+                  <Calendar
+                    current={agendaSelected}
+                    markedDates={markedDates}
+                    firstDay={1}
+                    enableSwipeMonths
+                    onDayPress={(day: any) => {
+                      if (day?.dateString && day.dateString !== agendaSelected) {
+                        setAgendaSelected(day.dateString);
+                      }
+                    }}
+                    theme={calendarTheme}
+                  />
+                </View>
+
+                {/* Day bookings list */}
+                <View style={{ flex: 1, marginTop: 10 }}>
+                  {dayBookings.length === 0 ? (
+                    <View style={styles.center}>
+                      <Text style={styles.emptyText}>
+                        Δεν υπάρχουν κρατήσεις για αυτή την ημέρα.
+                      </Text>
+                    </View>
+                  ) : (
+                    <FlatList
+                      data={dayBookings}
+                      keyExtractor={b => b.id}
+                      renderItem={({ item }) => renderBookingCard(item)}
+                      contentContainerStyle={{ paddingBottom: 24 }}
+                      refreshControl={
+                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                      }
+                      showsVerticalScrollIndicator={false}
+                    />
+                  )}
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -449,14 +573,14 @@ const makeStyles = (colors: ThemeColors) =>
     container: {
       flex: 1,
       paddingHorizontal: 16,
-      paddingTop: 40,
+      paddingTop: 16,
       backgroundColor: colors.bg,
     },
     headerRow: {
       flexDirection: 'row',
       justifyContent: 'space-between',
       alignItems: 'flex-end',
-      marginBottom: 8,
+      marginBottom: 10,
     },
     headerTitle: {
       color: colors.text,
@@ -467,8 +591,36 @@ const makeStyles = (colors: ThemeColors) =>
       color: colors.textMuted,
       fontSize: 13,
     },
+
+    tabBar: {
+      flexDirection: 'row',
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      borderRadius: 999,
+      overflow: 'hidden',
+      backgroundColor: colors.card,
+    },
+    tab: {
+      flex: 1,
+      paddingVertical: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: 'transparent',
+    },
+    tabActive: {
+      backgroundColor: colors.primary,
+    },
+    tabText: {
+      color: colors.textMuted,
+      fontSize: 13,
+      fontWeight: '700',
+    },
+    tabTextActive: {
+      color: '#fff',
+    },
+
     section: {
-      marginTop: 8,
+      marginTop: 10,
       marginBottom: 4,
     },
     sectionTitle: {
@@ -505,27 +657,29 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: '600',
     },
 
-    capacityText: {
-      fontSize: 13,
-      color: colors.textMuted,
-      marginTop: 4,
-      marginBottom: 8,
-    },
-
-
     center: {
       flex: 1,
       justifyContent: 'center',
       alignItems: 'center',
+      paddingVertical: 18,
     },
     emptyText: {
       color: colors.textMuted,
       textAlign: 'center',
     },
     errorText: {
-      marginTop: 4,
+      marginTop: 8,
       fontSize: 13,
       color: '#f97316',
+    },
+
+    calendarWrap: {
+      flex: 1,
+      borderRadius: 12,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      backgroundColor: colors.bg,
     },
 
     card: {
@@ -535,6 +689,8 @@ const makeStyles = (colors: ThemeColors) =>
       marginBottom: 10,
       borderWidth: 1,
       borderColor: colors.textMuted,
+      marginHorizontal: 12,
+      marginTop: 10,
     },
     cardHeader: {
       flexDirection: 'row',
@@ -571,7 +727,7 @@ const makeStyles = (colors: ThemeColors) =>
       color: '#000',
     },
     statusBooked: {
-      backgroundColor: colors.primary ?? colors.primary,
+      backgroundColor: colors.primary,
     },
     statusCheckedIn: {
       backgroundColor: colors.success,
@@ -612,10 +768,16 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: '600',
       color: colors.error ?? '#ef4444',
     },
-
     cancelButtonDisabled: {
       opacity: 0.4,
     },
 
+    calendarCard: {
+      borderRadius: 12,
+      overflow: 'hidden',
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      backgroundColor: colors.bg,
+    },
 
   });

@@ -1,9 +1,9 @@
-import { Calendar, List, User, QrCode, QrCodeIcon } from 'lucide-react-native';
+import { Calendar, List, User, QrCodeIcon, Dumbbell } from 'lucide-react-native';
 import { Tabs } from 'expo-router';
 import { useTheme } from '../../context/ThemeProvider';
 
 export default function TabsLayout() {
-    const { colors } = useTheme();
+  const { colors } = useTheme();
   return (
     <Tabs screenOptions={{
       headerShown: false,
@@ -32,7 +32,7 @@ export default function TabsLayout() {
           ),
         }}
       />
-            <Tabs.Screen
+      <Tabs.Screen
         name="CheckIn"
         options={{
           title: 'Check-In',
@@ -41,6 +41,16 @@ export default function TabsLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="workouts"
+        options={{
+          title: 'Προπονήσεις',
+          tabBarIcon: ({ color, size }) => (
+            <Dumbbell color={color} size={size} />
+          ),
+        }}
+      />
+
       <Tabs.Screen
         name="profile"
         options={{

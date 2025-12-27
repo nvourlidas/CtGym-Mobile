@@ -19,7 +19,7 @@ import {
   startOfDay,
 } from 'date-fns';
 import { el } from 'date-fns/locale';
-import { Calendar, X } from 'lucide-react-native'; // 👈 Lucide
+import { Calendar, X, ChevronLeft, ChevronRight } from 'lucide-react-native';
 import { useTheme, ThemeColors } from '../context/ThemeProvider';
 
 type Props = {
@@ -43,6 +43,23 @@ export default function WeekDateFilter({ selectedDate, onChange }: Props) {
     () => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)),
     [weekStart],
   );
+
+  const thisWeekStart = useMemo(
+    () => startOfWeek(today, { weekStartsOn: 0 }),
+    [today],
+  );
+
+  const canGoPrevWeek = useMemo(
+    () => isBefore(thisWeekStart, weekStart), // allow prev only if we're in a future week
+    [thisWeekStart, weekStart],
+  );
+
+  const shiftWeek = (deltaDays: number) => {
+    const next = addDays(selectedDate, deltaDays);
+    const safe = isBefore(startOfDay(next), today) ? today : next;
+    onChange(safe);
+  };
+
 
   const handlePickerChange = (event: DateTimePickerEvent, date?: Date) => {
     if (event.type === 'dismissed') {
@@ -68,13 +85,29 @@ export default function WeekDateFilter({ selectedDate, onChange }: Props) {
       {/* Title + calendar icon */}
       <View style={styles.headerRow}>
         <Text style={styles.sectionTitle}>Ημέρα</Text>
-        <TouchableOpacity
-          style={styles.iconButton}
-          onPress={() => setShowPicker(true)}
-        >
-          <Calendar size={20} color={colors.text} />
-        </TouchableOpacity>
+
+        <View style={styles.headerActions}>
+          <TouchableOpacity
+            style={[styles.iconButton, !canGoPrevWeek && styles.iconButtonDisabled]}
+            onPress={() => shiftWeek(-7)}
+            disabled={!canGoPrevWeek}
+          >
+            <ChevronLeft
+              size={20}
+              color={canGoPrevWeek ? colors.text : colors.textMuted}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.iconButton} onPress={() => shiftWeek(7)}>
+            <ChevronRight size={20} color={colors.text} />
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.iconButton} onPress={() => setShowPicker(true)}>
+            <Calendar size={20} color={colors.text} />
+          </TouchableOpacity>
+        </View>
       </View>
+
 
       {/* Week days as small cards */}
       <View style={styles.daysRow}>
@@ -224,4 +257,14 @@ const makeStyles = (colors: ThemeColors) =>
       fontSize: 13,
       fontWeight: '500',
     },
+
+    headerActions: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 8,
+    },
+    iconButtonDisabled: {
+      opacity: 0.45,
+    },
+
   });

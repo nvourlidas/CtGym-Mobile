@@ -687,6 +687,7 @@ const makeStyles = (colors: ThemeColors) =>
       flexDirection: 'row',
       alignItems: 'center',
       marginBottom: 16,
+      marginTop: 5,
     },
     avatarCircle: {
       width: 56,

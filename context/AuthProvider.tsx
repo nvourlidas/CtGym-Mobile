@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { Profile } from '../types/types';
+import { useRegisterPushToken } from '../hooks/useRegisterPushToken';
 
 type AuthContextType = {
   session: Session | null;
@@ -17,6 +18,9 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   const [session, setSession] = useState<Session | null>(null);
   const [sessionLoaded, setSessionLoaded] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+
+  useRegisterPushToken(session?.user.id ?? null, setExpoPushToken);
 
   useEffect(() => {
     // load initial session
@@ -64,7 +68,20 @@ export default function AuthProvider({ children }: { children: React.ReactNode }
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      // remove only THIS device token
+      if (profile?.id && expoPushToken) {
+        await supabase
+          .from('push_tokens')
+          .delete()
+          .eq('user_id', profile.id)
+          .eq('expo_push_token', expoPushToken);
+      }
+      console.log('Signing out', profile?.id, expoPushToken);
+    } finally {
+      setExpoPushToken(null);
+      await supabase.auth.signOut();
+    }
   };
 
   return (

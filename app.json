@@ -17,7 +17,7 @@
       "supportsTablet": true,
       "icon": {
         "dark": "./assets/PNG/ios-dark_icon.png",
-        "light": "./assets/PNG/ios-light_icon.png",
+        "light": "./assets/PNG/ios-dark_icon.png",
         "tinted": "./assets/PNG/ios-tinted_icon.png"
       },
       "bundleIdentifier": "com.nvourlidas.ctgym",
@@ -48,6 +48,12 @@
         "projectId": "b7e9195c-57aa-4434-8613-228f6f9fe1a3"
       }
     },
-    "owner": "nvourlidas"
+    "owner": "nvourlidas",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/b7e9195c-57aa-4434-8613-228f6f9fe1a3"
+    }
   }
 }

@@ -17,7 +17,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router } from 'expo-router';
 import { format } from 'date-fns';
 import { el } from 'date-fns/locale';
-import { Plus, X, Save, Trash2, Search, ArrowLeft, Dumbbell } from 'lucide-react-native';
+import { Plus, X, Save, Trash2, Search, ArrowLeft, Dumbbell, Copy } from 'lucide-react-native';
 
 import { useAuth } from '../../context/AuthProvider';
 import { useTheme, ThemeColors } from '../../context/ThemeProvider';
@@ -28,7 +28,14 @@ import {
   getWgerEquipment,
   getExercisesByCategoryAndEquipment,
 } from '../../api/exercises';
-import { createWorkout, addWorkoutExercise, addWorkoutSets } from '../../api/workouts';
+import {
+  createWorkout,
+  addWorkoutExercise,
+  addWorkoutSets,
+  listMyWorkouts,
+  getWorkoutDetail,
+  type WorkoutRow,
+} from '../../api/workouts';
 import { Keyboard, TouchableWithoutFeedback } from 'react-native';
 import { categoryImageFor, equipmentImageFor } from '../../utils/exerciseImages';
 
@@ -49,72 +56,16 @@ type CategoryCard = {
   aliases?: string[]; // optional extra matches for category_name
 };
 
-// Static categories grid (replace imageUrl with your own assets or URLs)
-const CATEGORY_CARDS: CategoryCard[] = [
-  {
-    key: 'chest',
-    label: 'Chest',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1517964603305-11c0f6f66012?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'back',
-    label: 'Back',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1517836357463-d25dfeac3438?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'legs',
-    label: 'Legs',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1599058917212-d750089bc07f?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'shoulders',
-    label: 'Shoulders',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1605296867304-46d5465a13f1?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'arms',
-    label: 'Arms',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1583454110551-21f2fa2afe61?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'abs',
-    label: 'Abs',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1526401485004-2aa7c1297c98?auto=format&fit=crop&w=600&q=70',
-    aliases: ['Core'],
-  },
-  {
-    key: 'cardio',
-    label: 'Cardio',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1554284126-aa88f22d8b74?auto=format&fit=crop&w=600&q=70',
-  },
-  {
-    key: 'fullbody',
-    label: 'Full body',
-    wgerCategoryId: 8,
-    imageUrl:
-      'https://images.unsplash.com/photo-1556817411-31ae72fa3ea0?auto=format&fit=crop&w=600&q=70',
-    aliases: ['Full', 'Bodyweight'],
-  },
-];
-
 export default function NewWorkoutScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+
+  const [workoutName, setWorkoutName] = useState('');
+  const [templateModalOpen, setTemplateModalOpen] = useState(false);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templates, setTemplates] = useState<WorkoutRow[]>([]);
+
 
   const [saving, setSaving] = useState(false);
 
@@ -198,6 +149,67 @@ export default function NewWorkoutScreen() {
     return () => clearTimeout(t);
   }, [q, selectedCategory, selectedEquipment, exerciseModalOpen, step]);
 
+  useEffect(() => {
+    if (!templateModalOpen) return;
+    loadTemplates();
+  }, [templateModalOpen]);
+
+
+  const loadTemplates = async () => {
+    if (!profile?.id) return;
+    try {
+      setTemplatesLoading(true);
+      // load more than 20 so user has enough templates
+      const rows = await listMyWorkouts(profile.id, 60);
+      // treat "templates" as workouts that have a name
+      const onlyNamed = rows.filter((r) => (r.name ?? '').trim().length > 0);
+      setTemplates(onlyNamed);
+    } catch (e) {
+      console.log(e);
+      setTemplates([]);
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+
+  const applyTemplate = async (workoutId: string) => {
+    try {
+      setError(null);
+      setTemplatesLoading(true);
+
+      const detail = await getWorkoutDetail(workoutId);
+
+      setWorkoutName((detail.name ?? '').trim());
+
+      const mapped: LocalExercise[] = detail.exercises.map((ex) => ({
+        wger_id: ex.exercise_wger_id,
+        name: ex.exercise?.name ?? `Άσκηση #${ex.exercise_wger_id}`,
+        imageUrl: pickMainImageUrl(ex.exercise as any) ?? null,
+        sets: (ex.sets ?? []).length
+          ? ex.sets
+            .slice()
+            .sort((a, b) => (a.set_no ?? 0) - (b.set_no ?? 0))
+            .map((s) => ({
+              key: cryptoRandomKey(),
+              reps: s.reps == null ? '' : String(s.reps),
+              weight: s.weight == null ? '' : String(s.weight),
+            }))
+          : [{ key: cryptoRandomKey(), reps: '', weight: '' }],
+      }));
+
+      setItems(mapped);
+      setTemplateModalOpen(false);
+    } catch (e) {
+      console.log(e);
+      setError('Απέτυχε η φόρτωση template.');
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+
+
 
   const addExercise = (ex: ExerciseCatalogRow) => {
     setItems((prev) => {
@@ -275,11 +287,21 @@ export default function NewWorkoutScreen() {
       return;
     }
 
+    if (!workoutName.trim()) {
+      setError('Βάλε ένα όνομα (π.χ. Chest & Back) για να το ξαναχρησιμοποιείς ως template.');
+      return;
+    }
+
+
     try {
       setSaving(true);
       setError(null);
 
-      const workout = await createWorkout(profile.id, new Date().toISOString(), null);
+      const workout = await createWorkout(profile.id, new Date().toISOString(), {
+        name: workoutName.trim().length ? workoutName.trim() : null,
+        notes: null,
+      });
+
 
       for (let i = 0; i < items.length; i++) {
         const ex = items[i];
@@ -348,20 +370,45 @@ export default function NewWorkoutScreen() {
           </TouchableOpacity>
         </View>
 
+
+        <View style={styles.metaBlock}>
+          <Text style={styles.metaLabel}>Όνομα προπόνησης</Text>
+          <TextInput
+            value={workoutName}
+            onChangeText={setWorkoutName}
+            placeholder="π.χ. Chest & Back"
+            placeholderTextColor={colors.textMuted}
+            style={styles.nameInput}
+          />
+
+          <View style={styles.actionsRow}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.templateBtn]}
+              onPress={() => setTemplateModalOpen(true)}
+              disabled={saving}
+            >
+              <Copy color="#fff" size={16} />
+              <Text style={styles.templateBtnText}>Χρήση template</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.addExerciseBtnInline]}
+              onPress={() => {
+                setExerciseModalOpen(true);
+                setSelectedCat(null);
+                setQ('');
+                setResults([]);
+              }}
+              disabled={saving}
+            >
+              <Plus color="#fff" size={16} />
+              <Text style={styles.addExerciseBtnText}>Προσθήκη άσκησης</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {error && <Text style={styles.errorText}>{error}</Text>}
 
-        <TouchableOpacity
-          style={styles.addExerciseBtn}
-          onPress={() => {
-            setExerciseModalOpen(true);
-            setSelectedCat(null);
-            setQ('');
-            setResults([]);
-          }}
-        >
-          <Plus color="#fff" size={18} />
-          <Text style={styles.addExerciseBtnText}>Προσθήκη άσκησης</Text>
-        </TouchableOpacity>
 
         <ScrollView
           style={{ flex: 1 }}
@@ -638,6 +685,56 @@ export default function NewWorkoutScreen() {
             </SafeAreaView>
           </Pressable>
         </Modal>
+
+        <Modal visible={templateModalOpen} animationType="slide" presentationStyle="pageSheet">
+          <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
+            <View style={{ flex: 1, padding: 16 }}>
+              <View style={styles.modalHeader}>
+                <View style={{ width: 32 }} />
+                <Text style={styles.modalTitle}>Templates</Text>
+                <TouchableOpacity style={styles.iconBtnSm} onPress={() => setTemplateModalOpen(false)}>
+                  <X color={colors.text} size={18} />
+                </TouchableOpacity>
+              </View>
+
+              {templatesLoading ? (
+                <View style={styles.center}>
+                  <ActivityIndicator color={colors.accent} />
+                  <Text style={styles.emptyText}>Φόρτωση…</Text>
+                </View>
+              ) : (
+                <FlatList
+                  data={templates}
+                  keyExtractor={(t) => t.id}
+                  contentContainerStyle={{ paddingTop: 12, paddingBottom: 24 }}
+                  renderItem={({ item }) => {
+                    const name = (item.name ?? '').trim() || 'Χωρίς όνομα';
+                    const when = format(new Date(item.performed_at), 'dd/MM/yyyy', { locale: el });
+                    return (
+                      <TouchableOpacity
+                        style={styles.templateRow}
+                        onPress={() => applyTemplate(item.id)}
+                      >
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.templateTitle}>{name}</Text>
+                          <Text style={styles.templateSub}>{when}</Text>
+                        </View>
+                        <Copy color={colors.textMuted} size={18} />
+                      </TouchableOpacity>
+                    );
+                  }}
+                  ListEmptyComponent={
+                    <View style={styles.centerBlock}>
+                      <Text style={styles.emptyText}>
+                        Δεν υπάρχουν templates ακόμα. Δημιούργησε μια προπόνηση με όνομα και θα εμφανιστεί εδώ.
+                      </Text>
+                    </View>
+                  }
+                />
+              )}
+            </View>
+          </SafeAreaView>
+        </Modal>
       </View>
     </SafeAreaView>
   );
@@ -859,4 +956,68 @@ const makeStyles = (colors: ThemeColors) =>
       paddingHorizontal: 10,
       paddingVertical: 8,
     },
+
+    metaBlock: { marginTop: 12, gap: 8 },
+    metaLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '900' },
+
+    nameInput: {
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      borderRadius: 12,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      color: colors.text,
+      backgroundColor: colors.card,
+      fontWeight: '900',
+    },
+
+    templateBtn: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.primary,
+      paddingVertical: 12,
+      borderRadius: 12,
+    },
+
+    templateBtnText: { color: '#fff', fontWeight: '900', fontSize: 14 },
+
+    templateRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      paddingVertical: 12,
+      paddingHorizontal: 12,
+      borderWidth: 1,
+      borderColor: colors.textMuted,
+      borderRadius: 12,
+      backgroundColor: colors.card,
+      marginBottom: 10,
+    },
+
+    templateTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
+    templateSub: { marginTop: 2, color: colors.textMuted, fontSize: 12 },
+
+    actionsRow: {
+      flexDirection: 'row',
+      gap: 10,
+      marginTop: 6,
+    },
+
+    actionBtn: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      paddingVertical: 12,
+      borderRadius: 12,
+    },
+
+    addExerciseBtnInline: {
+      backgroundColor: colors.primary,
+    },
+
+
   });

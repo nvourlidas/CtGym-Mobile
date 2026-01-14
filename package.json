@@ -21,6 +21,7 @@
     "expo-notifications": "~0.32.14",
     "expo-router": "~6.0.14",
     "expo-status-bar": "~3.0.8",
+    "expo-updates": "~29.0.16",
     "lodash": "^4.17.21",
     "lucide-react-native": "^0.553.0",
     "react": "19.1.0",

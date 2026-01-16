@@ -12,6 +12,7 @@ import {
   ScrollView,
   Image,
   Pressable,
+  Keyboard,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
@@ -21,24 +22,19 @@ import { Plus, X, Save, Trash2, Search, ArrowLeft, Dumbbell, Copy } from 'lucide
 
 import { useAuth } from '../../context/AuthProvider';
 import { useTheme, ThemeColors } from '../../context/ThemeProvider';
+
+import type { ExerciseCatalogRow } from '../../api/exercises';
 import {
-  searchExercises,
-  type ExerciseCatalogRow,
   getWgerCategories,
   getWgerEquipment,
   getExercisesByCategoryAndEquipment,
 } from '../../api/exercises';
-import {
-  createWorkout,
-  addWorkoutExercise,
-  addWorkoutSets,
-  listMyWorkouts,
-  getWorkoutDetail,
-  type WorkoutRow,
-} from '../../api/workouts';
-import { Keyboard, TouchableWithoutFeedback } from 'react-native';
+
+import { createWorkout, addWorkoutExercise, addWorkoutSets } from '../../api/workouts';
+
 import { categoryImageFor, equipmentImageFor } from '../../utils/exerciseImages';
 
+import { listAssignedTemplates, getTemplateDetail, type AssignedTemplateRow } from '../../api/templates';
 
 type LocalSet = { key: string; reps: string; weight: string };
 type LocalExercise = {
@@ -48,58 +44,46 @@ type LocalExercise = {
   imageUrl?: string | null;
 };
 
-type CategoryCard = {
-  key: string;
-  label: string;
-  imageUrl: string;
-  wgerCategoryId: number;
-  aliases?: string[]; // optional extra matches for category_name
-};
+type WgerCategory = { id: number; name: string };
+type WgerEquipment = { id: number; name: string };
 
 export default function NewWorkoutScreen() {
   const { profile } = useAuth();
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const insets = useSafeAreaInsets();
 
   const [workoutName, setWorkoutName] = useState('');
+
+  // templates
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [templatesLoading, setTemplatesLoading] = useState(false);
-  const [templates, setTemplates] = useState<WorkoutRow[]>([]);
+  const [templates, setTemplates] = useState<AssignedTemplateRow[]>([]);
 
-
+  // saving workout
   const [saving, setSaving] = useState(false);
 
-  // Modal state
+  // exercise picker modal
   const [exerciseModalOpen, setExerciseModalOpen] = useState(false);
-  const [selectedCat, setSelectedCat] = useState<CategoryCard | null>(null);
-
-  // Search state
-  const [q, setQ] = useState('');
-  const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<ExerciseCatalogRow[]>([]);
-
-  const [error, setError] = useState<string | null>(null);
-  const [items, setItems] = useState<LocalExercise[]>([]);
-
-  type WgerCategory = { id: number; name: string };
-  type WgerEquipment = { id: number; name: string };
-
   const [step, setStep] = useState<'category' | 'equipment' | 'exercise'>('category');
 
   const [categories, setCategories] = useState<WgerCategory[]>([]);
   const [equipment, setEquipment] = useState<WgerEquipment[]>([]);
-
   const [selectedCategory, setSelectedCategory] = useState<WgerCategory | null>(null);
   const [selectedEquipment, setSelectedEquipment] = useState<WgerEquipment | null>(null); // null = All
 
-  const insets = useSafeAreaInsets();
+  // search exercises
+  const [q, setQ] = useState('');
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState<ExerciseCatalogRow[]>([]);
 
-  const nowLabel = useMemo(
-    () => format(new Date(), 'EEE dd/MM · HH:mm', { locale: el }),
-    [],
-  );
+  // workout items
+  const [error, setError] = useState<string | null>(null);
+  const [items, setItems] = useState<LocalExercise[]>([]);
 
-  // Whenever modal opens: always show categories first
+  const nowLabel = useMemo(() => format(new Date(), 'EEE dd/MM · HH:mm', { locale: el }), []);
+
+  // Load categories/equipment when exercise modal opens
   useEffect(() => {
     if (!exerciseModalOpen) return;
 
@@ -120,7 +104,7 @@ export default function NewWorkoutScreen() {
     setResults([]);
   }, [exerciseModalOpen]);
 
-
+  // Search exercises when in "exercise" step
   useEffect(() => {
     if (!exerciseModalOpen) return;
     if (!selectedCategory) return;
@@ -129,14 +113,12 @@ export default function NewWorkoutScreen() {
     const t = setTimeout(async () => {
       try {
         setSearching(true);
-
         const data = await getExercisesByCategoryAndEquipment({
           categoryId: selectedCategory.id,
-          equipmentId: selectedEquipment?.id ?? null, // null => all
+          equipmentId: selectedEquipment?.id ?? null,
           q,
           limit: 60,
         });
-
         setResults(data);
       } catch (e) {
         console.log(e);
@@ -149,21 +131,24 @@ export default function NewWorkoutScreen() {
     return () => clearTimeout(t);
   }, [q, selectedCategory, selectedEquipment, exerciseModalOpen, step]);
 
+  // Load assigned templates when modal opens
   useEffect(() => {
     if (!templateModalOpen) return;
     loadTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateModalOpen]);
 
-
   const loadTemplates = async () => {
-    if (!profile?.id) return;
+    if (!profile?.id || !profile?.tenant_id) return;
+
     try {
       setTemplatesLoading(true);
-      // load more than 20 so user has enough templates
-      const rows = await listMyWorkouts(profile.id, 60);
-      // treat "templates" as workouts that have a name
-      const onlyNamed = rows.filter((r) => (r.name ?? '').trim().length > 0);
-      setTemplates(onlyNamed);
+      const rows = await listAssignedTemplates({
+        tenantId: profile.tenant_id,
+        memberId: profile.id,
+        limit: 60,
+      });
+      setTemplates(rows);
     } catch (e) {
       console.log(e);
       setTemplates([]);
@@ -172,31 +157,46 @@ export default function NewWorkoutScreen() {
     }
   };
 
+  /**
+   * ✅ Applies Option-B fix:
+   * getTemplateDetail() must fetch template exercises+sets and then fetch exercise_catalog rows,
+   * then join in JS. This file just consumes the final "detail".
+   */
+  const applyTemplate = async (templateId: string) => {
+    if (!profile?.tenant_id) return;
 
-  const applyTemplate = async (workoutId: string) => {
     try {
       setError(null);
       setTemplatesLoading(true);
 
-      const detail = await getWorkoutDetail(workoutId);
+      const detail = await getTemplateDetail({
+        tenantId: profile.tenant_id,
+        templateId,
+      });
 
-      setWorkoutName((detail.name ?? '').trim());
+      setWorkoutName((detail.name ?? '').trim() || 'Προπόνηση');
 
-      const mapped: LocalExercise[] = detail.exercises.map((ex) => ({
-        wger_id: ex.exercise_wger_id,
-        name: ex.exercise?.name ?? `Άσκηση #${ex.exercise_wger_id}`,
-        imageUrl: pickMainImageUrl(ex.exercise as any) ?? null,
-        sets: (ex.sets ?? []).length
-          ? ex.sets
-            .slice()
-            .sort((a, b) => (a.set_no ?? 0) - (b.set_no ?? 0))
-            .map((s) => ({
+      const mapped: LocalExercise[] = (detail.exercises ?? []).map((ex) => {
+        const exerciseName = ex.exercise?.name ?? `Άσκηση #${ex.exercise_wger_id}`;
+        const img = ex.exercise ? pickMainImageUrl(ex.exercise as any) : null;
+
+        const setsSorted = (ex.sets ?? [])
+          .slice()
+          .sort((a: any, b: any) => (a.set_no ?? 0) - (b.set_no ?? 0));
+
+        return {
+          wger_id: ex.exercise_wger_id,
+          name: exerciseName,
+          imageUrl: img,
+          sets: setsSorted.length
+            ? setsSorted.map((s: any) => ({
               key: cryptoRandomKey(),
               reps: s.reps == null ? '' : String(s.reps),
               weight: s.weight == null ? '' : String(s.weight),
             }))
-          : [{ key: cryptoRandomKey(), reps: '', weight: '' }],
-      }));
+            : [{ key: cryptoRandomKey(), reps: '', weight: '' }],
+        };
+      });
 
       setItems(mapped);
       setTemplateModalOpen(false);
@@ -207,9 +207,6 @@ export default function NewWorkoutScreen() {
       setTemplatesLoading(false);
     }
   };
-
-
-
 
   const addExercise = (ex: ExerciseCatalogRow) => {
     setItems((prev) => {
@@ -225,9 +222,7 @@ export default function NewWorkoutScreen() {
       ];
     });
 
-    // close modal and reset
     setExerciseModalOpen(false);
-    setSelectedCat(null);
     setQ('');
     setResults([]);
   };
@@ -240,10 +235,7 @@ export default function NewWorkoutScreen() {
     setItems((prev) =>
       prev.map((ex) =>
         ex.wger_id === wgerId
-          ? {
-            ...ex,
-            sets: [...ex.sets, { key: cryptoRandomKey(), reps: '', weight: '' }],
-          }
+          ? { ...ex, sets: [...ex.sets, { key: cryptoRandomKey(), reps: '', weight: '' }] }
           : ex,
       ),
     );
@@ -254,54 +246,43 @@ export default function NewWorkoutScreen() {
       prev.map((ex) => {
         if (ex.wger_id !== wgerId) return ex;
         const next = ex.sets.filter((s) => s.key !== setKey);
-        return {
-          ...ex,
-          sets: next.length ? next : [{ key: cryptoRandomKey(), reps: '', weight: '' }],
-        };
+        return { ...ex, sets: next.length ? next : [{ key: cryptoRandomKey(), reps: '', weight: '' }] };
       }),
     );
   };
 
-  const updateSet = (
-    wgerId: number,
-    setKey: string,
-    field: 'reps' | 'weight',
-    value: string,
-  ) => {
+  const updateSet = (wgerId: number, setKey: string, field: 'reps' | 'weight', value: string) => {
     const clean = value.replace(',', '.');
     setItems((prev) =>
-      prev.map((ex) => {
-        if (ex.wger_id !== wgerId) return ex;
-        return {
-          ...ex,
-          sets: ex.sets.map((s) => (s.key === setKey ? { ...s, [field]: clean } : s)),
-        };
-      }),
+      prev.map((ex) =>
+        ex.wger_id === wgerId
+          ? { ...ex, sets: ex.sets.map((s) => (s.key === setKey ? { ...s, [field]: clean } : s)) }
+          : ex,
+      ),
     );
   };
 
   const onSave = async () => {
     if (!profile?.id) return;
+
     if (items.length === 0) {
       setError('Πρόσθεσε τουλάχιστον 1 άσκηση.');
       return;
     }
 
     if (!workoutName.trim()) {
-      setError('Βάλε ένα όνομα (π.χ. Chest & Back) για να το ξαναχρησιμοποιείς ως template.');
+      setError('Βάλε ένα όνομα (π.χ. Chest & Back).');
       return;
     }
-
 
     try {
       setSaving(true);
       setError(null);
 
       const workout = await createWorkout(profile.id, new Date().toISOString(), {
-        name: workoutName.trim().length ? workoutName.trim() : null,
+        name: workoutName.trim(),
         notes: null,
       });
-
 
       for (let i = 0; i < items.length; i++) {
         const ex = items[i];
@@ -310,7 +291,6 @@ export default function NewWorkoutScreen() {
         const setsPayload = ex.sets.map((s, idx) => {
           const reps = s.reps.trim() ? Number(s.reps) : null;
           const weight = s.weight.trim() ? Number(s.weight) : null;
-
           return {
             set_no: idx + 1,
             reps: Number.isFinite(reps as any) ? reps : null,
@@ -344,6 +324,7 @@ export default function NewWorkoutScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
       <View style={styles.container}>
+        {/* Header */}
         <View style={styles.headerRow}>
           <TouchableOpacity style={styles.iconBtn} onPress={() => router.back()}>
             <X color={colors.text} size={18} />
@@ -354,11 +335,7 @@ export default function NewWorkoutScreen() {
             <Text style={styles.headerSub}>{nowLabel}</Text>
           </View>
 
-          <TouchableOpacity
-            style={[styles.saveBtn, saving && { opacity: 0.6 }]}
-            onPress={onSave}
-            disabled={saving}
-          >
+          <TouchableOpacity style={[styles.saveBtn, saving && { opacity: 0.6 }]} onPress={onSave} disabled={saving}>
             {saving ? (
               <ActivityIndicator color="#fff" />
             ) : (
@@ -370,7 +347,7 @@ export default function NewWorkoutScreen() {
           </TouchableOpacity>
         </View>
 
-
+        {/* Name + actions */}
         <View style={styles.metaBlock}>
           <Text style={styles.metaLabel}>Όνομα προπόνησης</Text>
           <TextInput
@@ -395,7 +372,6 @@ export default function NewWorkoutScreen() {
               style={[styles.actionBtn, styles.addExerciseBtnInline]}
               onPress={() => {
                 setExerciseModalOpen(true);
-                setSelectedCat(null);
                 setQ('');
                 setResults([]);
               }}
@@ -409,12 +385,8 @@ export default function NewWorkoutScreen() {
 
         {error && <Text style={styles.errorText}>{error}</Text>}
 
-
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ paddingBottom: 24 }}
-          showsVerticalScrollIndicator={false}
-        >
+        {/* Exercises */}
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
           {items.length === 0 ? (
             <View style={styles.centerBlock}>
               <Text style={styles.emptyText}>Πάτα “Προσθήκη άσκησης” για να ξεκινήσεις.</Text>
@@ -424,9 +396,7 @@ export default function NewWorkoutScreen() {
               <View key={ex.wger_id} style={styles.exerciseCard}>
                 <View style={styles.exerciseHeader}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                    {!!ex.imageUrl && (
-                      <Image source={{ uri: ex.imageUrl }} style={styles.thumb} resizeMode="cover" />
-                    )}
+                    {!!ex.imageUrl && <Image source={{ uri: ex.imageUrl }} style={styles.thumb} resizeMode="cover" />}
                     <Text style={styles.exerciseTitle}>{ex.name}</Text>
                   </View>
 
@@ -448,9 +418,7 @@ export default function NewWorkoutScreen() {
 
                     <TextInput
                       value={s.reps}
-                      onChangeText={(v) =>
-                        updateSet(ex.wger_id, s.key, 'reps', v.replace(/[^0-9]/g, ''))
-                      }
+                      onChangeText={(v) => updateSet(ex.wger_id, s.key, 'reps', v.replace(/[^0-9]/g, ''))}
                       keyboardType="number-pad"
                       placeholder="0"
                       placeholderTextColor={colors.textMuted}
@@ -459,19 +427,14 @@ export default function NewWorkoutScreen() {
 
                     <TextInput
                       value={s.weight}
-                      onChangeText={(v) =>
-                        updateSet(ex.wger_id, s.key, 'weight', v.replace(/[^0-9.,]/g, ''))
-                      }
+                      onChangeText={(v) => updateSet(ex.wger_id, s.key, 'weight', v.replace(/[^0-9.,]/g, ''))}
                       keyboardType="decimal-pad"
                       placeholder="0"
                       placeholderTextColor={colors.textMuted}
                       style={styles.input}
                     />
 
-                    <TouchableOpacity
-                      style={styles.iconBtnSm}
-                      onPress={() => removeSet(ex.wger_id, s.key)}
-                    >
+                    <TouchableOpacity style={styles.iconBtnSm} onPress={() => removeSet(ex.wger_id, s.key)}>
                       <X color={colors.textMuted} size={16} />
                     </TouchableOpacity>
                   </View>
@@ -486,7 +449,7 @@ export default function NewWorkoutScreen() {
           )}
         </ScrollView>
 
-        {/* Exercise Picker Modal: Category -> Equipment -> Exercise */}
+        {/* Exercise Picker Modal */}
         <Modal visible={exerciseModalOpen} animationType="slide" presentationStyle="fullScreen" statusBarTranslucent>
           <Pressable style={{ flex: 1 }} onPress={Keyboard.dismiss}>
             <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
@@ -537,7 +500,6 @@ export default function NewWorkoutScreen() {
                       style={styles.iconBtnSm}
                       onPress={() => {
                         setExerciseModalOpen(false);
-
                         setStep('category');
                         setSelectedCategory(null);
                         setSelectedEquipment(null);
@@ -650,13 +612,10 @@ export default function NewWorkoutScreen() {
                           keyboardDismissMode="on-drag"
                           renderItem={({ item }) => {
                             const img = pickMainImageUrl(item);
-
                             return (
                               <TouchableOpacity style={styles.resultRow} onPress={() => addExercise(item)}>
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                                  {!!img && (
-                                    <Image source={{ uri: img }} style={styles.resultThumb} resizeMode="cover" />
-                                  )}
+                                  {!!img && <Image source={{ uri: img }} style={styles.resultThumb} resizeMode="cover" />}
 
                                   <View style={{ flex: 1 }}>
                                     <Text style={styles.resultTitle}>{item.name}</Text>
@@ -686,6 +645,7 @@ export default function NewWorkoutScreen() {
           </Pressable>
         </Modal>
 
+        {/* Templates Modal */}
         <Modal visible={templateModalOpen} animationType="slide" presentationStyle="pageSheet">
           <SafeAreaView style={{ flex: 1, backgroundColor: colors.bg }}>
             <View style={{ flex: 1, padding: 16 }}>
@@ -705,19 +665,32 @@ export default function NewWorkoutScreen() {
               ) : (
                 <FlatList
                   data={templates}
-                  keyExtractor={(t) => t.id}
+                  keyExtractor={(t) => t.assignment_id}
                   contentContainerStyle={{ paddingTop: 12, paddingBottom: 24 }}
                   renderItem={({ item }) => {
-                    const name = (item.name ?? '').trim() || 'Χωρίς όνομα';
-                    const when = format(new Date(item.performed_at), 'dd/MM/yyyy', { locale: el });
+                    if (!item.template) return null; // 👈 hard guard
+
+                    const tpl = item.template;
+
+                    const name = (tpl.name ?? '').trim() || 'Χωρίς όνομα';
+                    const when = format(
+                      new Date(item.assigned_at ?? tpl.created_at),
+                      'dd/MM/yyyy',
+                      { locale: el }
+                    );
+
                     return (
                       <TouchableOpacity
                         style={styles.templateRow}
-                        onPress={() => applyTemplate(item.id)}
+                        onPress={() => applyTemplate(item.template_id)}
                       >
                         <View style={{ flex: 1 }}>
                           <Text style={styles.templateTitle}>{name}</Text>
-                          <Text style={styles.templateSub}>{when}</Text>
+                          <Text style={styles.templateSub} numberOfLines={2}>
+                            {when}
+                            {item.status ? ` · ${item.status}` : ''}
+                            {item.message ? ` · ${item.message}` : ''}
+                          </Text>
                         </View>
                         <Copy color={colors.textMuted} size={18} />
                       </TouchableOpacity>
@@ -725,9 +698,7 @@ export default function NewWorkoutScreen() {
                   }}
                   ListEmptyComponent={
                     <View style={styles.centerBlock}>
-                      <Text style={styles.emptyText}>
-                        Δεν υπάρχουν templates ακόμα. Δημιούργησε μια προπόνηση με όνομα και θα εμφανιστεί εδώ.
-                      </Text>
+                      <Text style={styles.emptyText}>Δεν υπάρχουν templates για σένα ακόμα.</Text>
                     </View>
                   }
                 />
@@ -741,7 +712,6 @@ export default function NewWorkoutScreen() {
 }
 
 function cryptoRandomKey() {
-  // works in RN (no crypto dependency)
   return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
 }
 
@@ -751,32 +721,6 @@ function pickMainImageUrl(ex: ExerciseCatalogRow): string | null {
 
   const main = imgs.find((i) => i.is_main && i.url);
   return (main?.url ?? imgs[0]?.url ?? null) as string | null;
-}
-
-function normalizeText(value: string | null | undefined): string {
-  if (!value) return '';
-  return value
-    .toString()
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .trim();
-}
-
-function filterByCategoryName(rows: ExerciseCatalogRow[], cat: CategoryCard): ExerciseCatalogRow[] {
-  const target = normalizeText(cat.label);
-  const aliases = (cat.aliases ?? []).map(normalizeText);
-
-  return rows.filter((r) => {
-    const cn = normalizeText(r.category_name ?? '');
-    if (!cn) return false;
-    if (cn === target) return true;
-    if (aliases.includes(cn)) return true;
-    // also allow partial match (some APIs return "Chest (Pectorals)" etc.)
-    if (cn.includes(target)) return true;
-    if (aliases.some((a) => a && cn.includes(a))) return true;
-    return false;
-  });
 }
 
 const makeStyles = (colors: ThemeColors) =>
@@ -812,19 +756,6 @@ const makeStyles = (colors: ThemeColors) =>
 
     errorText: { marginTop: 8, fontSize: 13, color: '#f97316' },
 
-    addExerciseBtn: {
-      marginTop: 12,
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      backgroundColor: colors.primary,
-      paddingVertical: 12,
-      paddingHorizontal: 14,
-      borderRadius: 12,
-      justifyContent: 'center',
-    },
-    addExerciseBtnText: { color: '#fff', fontWeight: '900', fontSize: 14 },
-
     center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingVertical: 12 },
     centerBlock: { paddingVertical: 18, alignItems: 'center' },
     emptyText: { color: colors.textMuted, textAlign: 'center' },
@@ -837,12 +768,7 @@ const makeStyles = (colors: ThemeColors) =>
       borderWidth: 1,
       borderColor: colors.textMuted,
     },
-    exerciseHeader: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      gap: 10,
-    },
+    exerciseHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10 },
     exerciseTitle: { color: colors.text, fontSize: 15, fontWeight: '900', flexShrink: 1 },
 
     setHeaderRow: { flexDirection: 'row', marginTop: 12, paddingBottom: 6 },
@@ -866,25 +792,6 @@ const makeStyles = (colors: ThemeColors) =>
     addSetBtn: { marginTop: 12, flexDirection: 'row', alignItems: 'center', gap: 8 },
     addSetText: { color: colors.accent, fontWeight: '900' },
 
-    modalCardFull: {
-      flex: 1,
-      backgroundColor: colors.bg,
-      padding: 14,
-    },
-
-    modalBackdrop: {
-      flex: 1,
-      backgroundColor: colors.bg,
-    },
-    modalCard: {
-      flex: 1,                    // ✅ take all screen
-      height: undefined,          // ✅ remove 80%
-      backgroundColor: colors.bg,
-      borderTopLeftRadius: 0,     // ✅ no sheet radius
-      borderTopRightRadius: 0,
-      padding: 14,
-      borderWidth: 0,             // optional: remove border
-    },
     modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
     modalTitle: { color: colors.text, fontSize: 16, fontWeight: '900' },
 
@@ -901,11 +808,7 @@ const makeStyles = (colors: ThemeColors) =>
     },
     searchInput: { flex: 1, color: colors.text, paddingVertical: 10, fontWeight: '700' },
 
-    resultRow: {
-      paddingVertical: 12,
-      borderBottomWidth: 1,
-      borderBottomColor: colors.textMuted,
-    },
+    resultRow: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.textMuted },
     resultTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
     resultSub: { marginTop: 3, color: colors.textMuted, fontSize: 12 },
 
@@ -917,7 +820,6 @@ const makeStyles = (colors: ThemeColors) =>
       borderColor: colors.textMuted,
       backgroundColor: colors.bg,
     },
-
     resultThumb: {
       width: 40,
       height: 40,
@@ -937,25 +839,9 @@ const makeStyles = (colors: ThemeColors) =>
       overflow: 'hidden',
       minHeight: 110,
     },
-    catImg: {
-      width: '100%',
-      height: 76,
-      backgroundColor: colors.bg,
-    },
-    catImgPlaceholder: {
-      width: '100%',
-      height: 76,
-      backgroundColor: colors.bg,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-    catLabel: {
-      color: colors.text,
-      fontWeight: '900',
-      fontSize: 12,
-      paddingHorizontal: 10,
-      paddingVertical: 8,
-    },
+    catImg: { width: '100%', height: 76, backgroundColor: colors.bg },
+    catImgPlaceholder: { width: '100%', height: 76, backgroundColor: colors.bg, alignItems: 'center', justifyContent: 'center' },
+    catLabel: { color: colors.text, fontWeight: '900', fontSize: 12, paddingHorizontal: 10, paddingVertical: 8 },
 
     metaBlock: { marginTop: 12, gap: 8 },
     metaLabel: { color: colors.textMuted, fontSize: 12, fontWeight: '900' },
@@ -971,17 +857,23 @@ const makeStyles = (colors: ThemeColors) =>
       fontWeight: '900',
     },
 
-    templateBtn: {
+    actionsRow: { flexDirection: 'row', gap: 10, marginTop: 6 },
+
+    actionBtn: {
+      flex: 1,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'center',
       gap: 8,
-      backgroundColor: colors.primary,
       paddingVertical: 12,
       borderRadius: 12,
     },
 
+    templateBtn: { backgroundColor: colors.primary },
     templateBtnText: { color: '#fff', fontWeight: '900', fontSize: 14 },
+
+    addExerciseBtnInline: { backgroundColor: colors.primary },
+    addExerciseBtnText: { color: '#fff', fontWeight: '900', fontSize: 14 },
 
     templateRow: {
       flexDirection: 'row',
@@ -995,29 +887,6 @@ const makeStyles = (colors: ThemeColors) =>
       backgroundColor: colors.card,
       marginBottom: 10,
     },
-
     templateTitle: { color: colors.text, fontWeight: '900', fontSize: 14 },
     templateSub: { marginTop: 2, color: colors.textMuted, fontSize: 12 },
-
-    actionsRow: {
-      flexDirection: 'row',
-      gap: 10,
-      marginTop: 6,
-    },
-
-    actionBtn: {
-      flex: 1,
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      paddingVertical: 12,
-      borderRadius: 12,
-    },
-
-    addExerciseBtnInline: {
-      backgroundColor: colors.primary,
-    },
-
-
   });
